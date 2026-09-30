@@ -1,0 +1,506 @@
+import streamlit as st
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+from datetime import datetime, date
+import re
+import requests
+import io
+
+# -------------------------------------------------------------
+# 1. CẤU HÌNH TRANG & TÙY BIẾN CSS
+# -------------------------------------------------------------
+st.set_page_config(
+    page_title="Master Plan SG — Cảnh báo Delay & Theo dõi MQL",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+st.markdown("""
+<style>
+    .reportview-container, .main .block-container { padding-top: 1rem; padding-bottom: 2rem; max-width: 1550px; }
+    .header-box { background-color: var(--secondary-background-color); color: var(--text-color); padding: 16px 22px; border-radius: 8px; margin-bottom: 14px; border: 1px solid rgba(128, 128, 128, 0.2); }
+    .header-box h2 { margin: 0; font-size: 21px; font-weight: 700; color: var(--text-color) !important; }
+    .header-box p { margin: 4px 0 0 0; font-size: 12.5px; opacity: 0.8; }
+    .kpi-card { border-radius: 8px; padding: 14px 16px; box-shadow: 0 3px 6px rgba(0,0,0,0.15); margin-bottom: 12px; }
+    .kpi-card .kpi-title { font-size: 11px; text-transform: uppercase; font-weight: 800; letter-spacing: 0.5px; opacity: 0.9; }
+    .kpi-card .kpi-value { font-size: 27px; font-weight: 800; margin: 3px 0; }
+    .kpi-card .kpi-sub { font-size: 11px; opacity: 0.95; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .kpi-red { background-color: #ef4444; } .kpi-red * { color: #ffffff !important; }
+    .kpi-orange { background-color: #f97316; } .kpi-orange * { color: #ffffff !important; }
+    .kpi-amber { background-color: #facc15; } .kpi-amber * { color: #111827 !important; }
+    .kpi-blue { background-color: #3b82f6; } .kpi-blue * { color: #ffffff !important; }
+    .kpi-green { background-color: #22c55e; } .kpi-green * { color: #ffffff !important; }
+    .kpi-black { background-color: #000000; border: 1px solid rgba(255,255,255,0.1); } .kpi-black * { color: #ffffff !important; }
+    .m-card { background-color: var(--background-color); border: 1px solid rgba(128, 128, 128, 0.2); border-radius: 7px; padding: 10px 12px; border-left: 5px solid #22c55e; margin-bottom: 10px; min-height: 100px; }
+    .m-card.crit { border-left-color: #ef4444; background-color: rgba(239, 68, 68, 0.03); }
+    .m-card.warn { border-left-color: #f97316; background-color: rgba(249, 115, 22, 0.03); }
+    .m-card.idle { border-left-color: #94a3b8; background-color: var(--secondary-background-color); }
+    .mach-badge { font-size: 14px !important; font-weight: 800 !important; color: var(--text-color) !important; background-color: var(--secondary-background-color) !important; padding: 2px 9px !important; border-radius: 5px !important; display: inline-block !important; border: 1px solid rgba(128, 128, 128, 0.2) !important; }
+    .badge-red { background: rgba(239, 68, 68, 0.15); color: #ef4444 !important; padding: 2px 7px; border-radius: 10px; font-size: 11px; font-weight: 700; border: 1px solid rgba(239, 68, 68, 0.3); }
+    .badge-org { background: rgba(249, 115, 22, 0.15); color: #f97316 !important; padding: 2px 7px; border-radius: 10px; font-size: 11px; font-weight: 700; border: 1px solid rgba(249, 115, 22, 0.3); }
+    .badge-grn { background: rgba(34, 197, 94, 0.15); color: #22c55e !important; padding: 2px 7px; border-radius: 10px; font-size: 11px; font-weight: 700; border: 1px solid rgba(34, 197, 94, 0.3); }
+    .badge-gry { background: rgba(148, 163, 184, 0.15); color: #94a3b8 !important; padding: 2px 7px; border-radius: 10px; font-size: 11px; font-weight: 700; border: 1px solid rgba(148, 163, 184, 0.3); }
+</style>
+""", unsafe_allow_html=True)
+
+# -------------------------------------------------------------
+# 1.5 HEADER VÀ Ô CHỌN NGÀY THAM CHIẾU
+# -------------------------------------------------------------
+h_col1, h_col2 = st.columns([4, 1])
+with h_col1:
+    st.markdown("""<div class="header-box">
+<h2>Master Plan SG — Cảnh báo Delay & Theo dõi MQL</h2>
+<p>Ưu tiên xem theo Khách hàng / MQL · Bỏ qua các đơn có cột H = Done / Services</p>
+</div>""", unsafe_allow_html=True)
+with h_col2:
+    st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
+    ref_date = st.date_input("Ngày tham chiếu phân tích", date(2026, 9, 24))
+
+# -------------------------------------------------------------
+# 2. TỐI ƯU HÓA: CACHE KHÂU TẢI DỮ LIỆU & SESSION_STATE NHỚ LINK
+# -------------------------------------------------------------
+@st.cache_data(show_spinner=False, ttl=600) 
+def fetch_excel_from_url(gsheet_url_param):
+    try:
+        if "/e/" in gsheet_url_param and "pub" in gsheet_url_param:
+            download_url = gsheet_url_param.split("?")[0] + "?output=xlsx"
+        elif "spreadsheets/d/" in gsheet_url_param:
+            match = re.search(r"/d/([a-zA-Z0-9-_]+)", gsheet_url_param)
+            download_url = f"https://docs.google.com/spreadsheets/d/{match.group(1)}/export?format=xlsx" if match else None
+        elif "drive.google.com" in gsheet_url_param:
+            match = re.search(r"/d/([a-zA-Z0-9-_]+)", gsheet_url_param) or re.search(r"id=([a-zA-Z0-9-_]+)", gsheet_url_param)
+            download_url = f"https://drive.google.com/uc?export=download&id={match.group(1)}" if match else None
+        else:
+            download_url = gsheet_url_param
+
+        if download_url:
+            session = requests.Session()
+            response = session.get(download_url, stream=True)
+            token = next((v for k, v in response.cookies.items() if k.startswith('download_warning')), None)
+            if token:
+                response = session.get(download_url + f"&confirm={token}", stream=True)
+            if response.status_code == 200 and "text/html" not in response.headers.get("Content-Type", ""):
+                return response.content, None
+            else:
+                return None, "Lỗi tải file. Google chặn quyền truy cập hoặc link sai."
+        return None, "Link không hợp lệ."
+    except Exception as e:
+        return None, f"Lỗi mạng: {e}"
+
+st.sidebar.header("📁 Cập nhật kế hoạch")
+
+# Khởi tạo bộ nhớ tạm để ghim chặt link Google Sheets
+if "saved_link" not in st.session_state:
+    st.session_state["saved_link"] = ""
+
+# Khi bấm nút này, chỉ xóa Cache tải file, Streamlit sẽ tự động chạy lại từ đầu và giữ nguyên link
+if st.sidebar.button("🔄 Làm mới dữ liệu (Tải lại từ đầu)", type="primary"):
+    st.cache_data.clear()
+
+# Đã đưa "Dùng Link Google Sheets/Drive" lên làm lựa chọn mặc định
+data_source = st.sidebar.radio(
+    "Chọn phương thức tải dữ liệu:", 
+    ("Dùng Link Google Sheets/Drive", "Tải file Excel từ máy")
+)
+
+raw_file_bytes = None
+
+if data_source == "Tải file Excel từ máy":
+    uploaded_file = st.sidebar.file_uploader("Tải file Excel", type=["xlsx", "xls"])
+    if uploaded_file:
+        raw_file_bytes = uploaded_file.getvalue()
+else:
+    st.sidebar.info("💡 Lời khuyên: Dùng tính năng **Tệp > Chia sẻ > Công bố lên web** dạng Excel để lấy link chống chặn.")
+    
+    # Gắn key="saved_link" để Streamlit tự động lưu và nhớ link mỗi khi trang được làm mới
+    gsheet_url = st.sidebar.text_input("Dán Link vào đây:", key="saved_link")
+    
+    if gsheet_url:
+        with st.sidebar.status("Đang tải dữ liệu...", expanded=False) as status:
+            content, err = fetch_excel_from_url(gsheet_url)
+            if err:
+                status.update(label=err, state="error")
+            else:
+                raw_file_bytes = content
+                status.update(label="Dữ liệu đã sẵn sàng!", state="complete")
+
+FACTORY_MACHINES = [
+    "MB1", "MA2", "MB3", "MA6", "MB6", "MA7", "MB7", 
+    "MA1", "MB2", "MA3", "MA5", "MB5", "MA8", "MB8", 
+    "MA4", "MB4", "TC2", "TD2", "TC3", "TC1", "TD1", 
+    "GD1", "GD2", "WC"
+]
+
+MACHINE_DETAILS = {
+    "MA1": {"a": "TIÊN", "b": "VŨ", "note": "Hàng lắp nhiều dao → tăng thời gian"}, "MA2": {"a": "HẢI", "b": "TRẠNG", "note": "Máy hư sửa 9/9→12/09"},
+    "MA3": {"a": "B NAM", "b": "MẪN", "note": ""}, "MA4": {"a": "B NAM", "b": "MẪN", "note": "Sửa máy 17/08"},
+    "MA5": {"a": "NAM", "b": "LUÂN", "note": "Không chạy được dung sai <0,05 · hàng lẻ không ổn định"}, "MA6": {"a": "NAM", "b": "LUÂN", "note": ""},
+    "MA7": {"a": "KỲ", "b": "VINH", "note": ""}, "MA8": {"a": "HIỀN", "b": "MINH", "note": "Không chạy được dung sai <0,05"},
+    "MB1": {"a": "TIÊN", "b": "VŨ", "note": ""}, "MB2": {"a": "HẢI", "b": "TRẠNG", "note": "Hàng lẻ chạy không ổn định"},
+    "MB3": {"a": "THÀNH", "b": "THÔNG", "note": "Không chạy được dung sai <0,05"}, "MB4": {"a": "THÀNH", "b": "THÔNG", "note": ""},
+    "MB5": {"a": "NAM", "b": "LUÂN", "note": "Không chạy được dung sai <0,05 · máy hư 7/8–13/8"}, "MB6": {"a": "NAM", "b": "LUÂN", "note": "Không chạy được dung sai <0,05"},
+    "MB7": {"a": "KỲ", "b": "VINH", "note": "Sửa máy 17/08"}, "MB8": {"a": "HIỀN", "b": "MINH", "note": "Không chạy dung sai <0,05 · máy hư 7/8–13/8"},
+    "TC1": {"a": "HOÀNG", "b": "NAM (T)", "note": "Sửa máy 18/08–21/08"}, "TC2": {"a": "HOÀNG", "b": "NAM (T)", "note": "Máy hết hàng phù hợp"},
+    "TC3": {"a": "ĐỆ", "b": "KIỆT", "note": "Máy hết hàng phù hợp"}, "TD1": {"a": "ĐẠT", "b": "PHÚ", "note": "Máy hư 18/8→21/08 · sắp hết hàng"},
+    "TD2": {"a": "ĐẠT", "b": "PHÚ", "note": ""}, "GD1": {"a": "HỮU", "b": "—", "note": "Hàng lẻ chạy không ổn định · sắp hết hàng"},
+    "GD2": {"a": "HỮU", "b": "—", "note": "Rảnh máy kéo dài, chưa cấp lệnh mới"}, "WC": {"a": "—", "b": "—", "note": "Máy đang chờ cập nhật dữ liệu"}
+}
+
+# -------------------------------------------------------------
+# 3. HÀM ĐỌC DỮ LIỆU & LẤY NGÀY NỐI ĐUÔI
+# -------------------------------------------------------------
+def parse_gantt_dates(val, ref_year):
+    if pd.isna(val): return pd.NaT, pd.NaT
+    s = str(val).strip()
+    if not s: return pd.NaT, pd.NaT
+    if isinstance(val, (datetime, date)): return pd.to_datetime(val), pd.to_datetime(val)
+    try:
+        if '-' in s:
+            p1, p2 = s.split('-')[:2]
+            p1, p2 = p1.strip(), p2.strip()
+            m_p2 = re.search(r'(\d{1,2})/(\d{1,2})', p2)
+            if m_p2: d2, m2 = int(m_p2.group(1)), int(m_p2.group(2))
+            else: d2, m2 = int(re.sub(r'\D', '', p2)), datetime.now().month
+            m_p1 = re.search(r'(\d{1,2})/(\d{1,2})', p1)
+            if m_p1: d1, m1 = int(m_p1.group(1)), int(m_p1.group(2))
+            else: d1, m1 = int(re.sub(r'\D', '', p1)), m2 
+            start_dt = pd.Timestamp(year=ref_year, month=m1, day=d1)
+            end_dt = pd.Timestamp(year=ref_year, month=m2, day=d2)
+            if end_dt < start_dt: end_dt = end_dt.replace(year=ref_year + 1)
+            return start_dt, end_dt
+        else: 
+            m_s = re.search(r'(\d{1,2})/(\d{1,2})', s)
+            if m_s:
+                dt = pd.Timestamp(year=ref_year, month=int(m_s.group(2)), day=int(m_s.group(1)))
+                return dt, dt
+            elif re.match(r'^\d{4}-\d{2}-\d{2}', s):
+                dt = pd.to_datetime(s[:10], errors='coerce', dayfirst=True)
+                return dt, dt
+    except: pass
+    return pd.NaT, pd.NaT
+
+@st.cache_data(show_spinner=False)
+def load_and_preprocess_data(file_source_bytes, ref_dt_str):
+    ref_dt_val = pd.to_datetime(ref_dt_str)
+    configs = [('1. MP MILLING', 3, 'Phay'), ('2. MP TURNING', 5, 'Tiện'), ('3. MP GRINDING', 3, 'Mài')]
+    dfs = []
+    free_dates = {}
+    
+    try: xls = pd.ExcelFile(io.BytesIO(file_source_bytes))
+    except: return pd.DataFrame(), {}
+        
+    for sname, h_idx, ws in configs:
+        if sname in xls.sheet_names:
+            df = pd.read_excel(xls, sheet_name=sname, header=h_idx)
+            df.columns = [str(c).replace('\n', ' ').strip() for c in df.columns]
+            
+            date_col = next((col for col in df.columns if 'start & end' in col.lower()), None)
+            if date_col and 'Machine Name' in df.columns:
+                df['Machine Name'] = df['Machine Name'].ffill() 
+                df['End_Time_Raw'] = df.groupby('Machine Name')[date_col].shift(-1)
+                
+                for m in df['Machine Name'].dropna().unique():
+                    m_code = str(m).strip()
+                    m_df = df[df['Machine Name'] == m]
+                    v_dates = m_df[m_df[date_col].notna() & (m_df[date_col].astype(str).str.strip() != '')]
+                    if not v_dates.empty:
+                        free_dates[m_code] = v_dates.iloc[-1][date_col]
+            
+            if 'Job Order' in df.columns:
+                df = df[df['Job Order'].notna()].copy()
+                df['Job Order'] = df['Job Order'].astype(str).str.strip()
+                df = df[~df['Job Order'].str.contains(r'^\d+$|INSERT|CHỜ SẮP|MÀI|GCN|TOTAL|TỔNG', case=False, na=False)]
+                df['Workshop'] = ws
+                dfs.append(df)
+                
+    if not dfs: return pd.DataFrame(), {}
+    res = pd.concat(dfs, ignore_index=True)
+    
+    res['Customer'] = res['Job Order'].str.extract(r'^([A-Za-z]+)')[0].fillna('—').str.upper()
+    res['Machine Name'] = res['Machine Name'].fillna('—').astype(str).str.strip()
+    res['PO'] = res['PO'].fillna('—').astype(str).str.strip()
+    res['Status'] = res['Status'].fillna('Waiting').astype(str).str.strip()
+    
+    res['D2'] = pd.to_datetime(res.get('Deadline  2nd'), errors='coerce', dayfirst=True)
+    res['D1'] = pd.to_datetime(res.get('Deadline  1st'), errors='coerce', dayfirst=True)
+    res['Hạn áp dụng'] = res['D2'].combine_first(res['D1'])
+    
+    res['Còn (ngày)'] = (res['Hạn áp dụng'] - ref_dt_val).dt.days
+    
+    def classify_risk(row):
+        if str(row['Status']).strip().lower() in ['done', 'services']: return 'Đã xong / GC ngoài'
+        if pd.isna(row['Còn (ngày)']): return 'Thiếu hạn'
+        d = row['Còn (ngày)']
+        if d < 0: return 'Quá hạn'
+        if d < 7: return '< 7 ngày'
+        if d <= 14: return '7–14 ngày'
+        if d <= 21: return '14–21 ngày'
+        return 'An toàn'
+
+    res['Mức rủi ro'] = res.apply(classify_risk, axis=1)
+    
+    if date_col and 'End_Time_Raw' in res.columns:
+        parsed_dates = res[date_col].apply(lambda x: parse_gantt_dates(x, ref_dt_val.year))
+        res['Start'] = [p[0] for p in parsed_dates]
+        parsed_ends = res['End_Time_Raw'].apply(lambda x: parse_gantt_dates(x, ref_dt_val.year)[0])
+        res['End'] = parsed_ends.combine_first(pd.Series([p[1] for p in parsed_dates], index=res.index))
+        res.loc[res['Start'] == res['End'], 'End'] += pd.Timedelta(hours=23, minutes=59)
+        res['Mã rút gọn'] = res['Job Order'].astype(str).str[:3].str.upper()
+
+    return res, free_dates
+
+if raw_file_bytes is not None:
+    df_raw, machine_free_dates = load_and_preprocess_data(raw_file_bytes, str(ref_date))
+else:
+    df_raw, machine_free_dates = pd.DataFrame(), {}
+
+if df_raw.empty:
+    st.info("👋 Vui lòng Tải file Excel hoặc Dán link 'Công bố lên web' ở thanh menu bên trái để bắt đầu.")
+    st.stop()
+
+df_open = df_raw[~df_raw['Status'].astype(str).str.strip().str.lower().isin(['done', 'services'])].copy()
+
+# -------------------------------------------------------------
+# 5. BỘ LỌC TƯƠNG TÁC
+# -------------------------------------------------------------
+f1, f2, f3, f4 = st.columns([1.5, 1.5, 1.5, 2.5])
+with f1: sel_cust = st.selectbox("Khách hàng", ['Tất cả'] + sorted(list(df_open['Customer'].unique())))
+with f2: sel_mach = st.selectbox("Máy", ['Tất cả'] + sorted(list(df_open['Machine Name'].unique())))
+with f3: sel_risk = st.selectbox("Mức rủi ro", ['Tất cả', 'Quá hạn', '< 7 ngày', '7–14 ngày', '14–21 ngày', 'An toàn'])
+with f4: search_q = st.text_input("Tìm MQL / PO / BV", placeholder="VD: NLA2608, HC_64...").strip().lower()
+
+df_filtered = df_open.copy()
+if sel_cust != 'Tất cả': df_filtered = df_filtered[df_filtered['Customer'] == sel_cust]
+if sel_mach != 'Tất cả': df_filtered = df_filtered[df_filtered['Machine Name'] == sel_mach]
+if sel_risk != 'Tất cả': df_filtered = df_filtered[df_filtered['Mức rủi ro'] == sel_risk]
+if search_q:
+    df_filtered = df_filtered[
+        df_filtered['Job Order'].str.lower().str.contains(search_q, na=False) |
+        df_filtered['PO'].str.lower().str.contains(search_q, na=False) |
+        df_filtered['Drawing No.'].astype(str).str.lower().str.contains(search_q, na=False)
+    ]
+
+# -------------------------------------------------------------
+# 6. KHỐI THẺ KPI & NÚT XUẤT EXCEL
+# -------------------------------------------------------------
+n_over = len(df_filtered[df_filtered['Mức rủi ro'] == 'Quá hạn'])
+n_cam  = len(df_filtered[df_filtered['Mức rủi ro'] == '< 7 ngày'])
+n_vang = len(df_filtered[df_filtered['Mức rủi ro'] == '7–14 ngày'])
+n_blue = len(df_filtered[df_filtered['Mức rủi ro'] == '14–21 ngày'])
+n_safe = len(df_filtered[df_filtered['Mức rủi ro'] == 'An toàn'])
+n_open = len(df_filtered)
+
+worst_over = df_filtered[df_filtered['Mức rủi ro'] == 'Quá hạn'].sort_values('Còn (ngày)')
+worst_txt = f"Trễ nhất: {worst_over.iloc[0]['Job Order']} ({-worst_over.iloc[0]['Còn (ngày)']} ngày)" if not worst_over.empty else "Không có"
+
+df_summary = pd.DataFrame({
+    "Ngày xuất": [datetime.now().strftime("%d/%m/%Y")],
+    "Số đơn quá hạn": [n_over], "< 7 ngày (Cần xử lý)": [n_cam], "7-14 ngày (Theo dõi)": [n_vang],
+    "14-21 ngày (Không chủ quan)": [n_blue], "> 21 ngày (An toàn)": [n_safe], "Tổng đơn chưa hoàn thành": [n_open]
+})
+
+@st.cache_data(show_spinner=False)
+def convert_summary_to_excel(df):
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer: df.to_excel(writer, index=False, sheet_name='ThongKe_KPI')
+    return output.getvalue()
+
+btn_col1, btn_col2 = st.columns([7, 2])
+with btn_col1: st.markdown("##### 📊 TỔNG QUAN CHỈ SỐ RỦI RO")
+with btn_col2:
+    st.download_button(label="📥 Tải thống kê KPI (Excel)", data=convert_summary_to_excel(df_summary), file_name=f"ThongKe_KPI_{datetime.now().strftime('%Y%m%d')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+
+k1, k2, k3, k4, k5, k6 = st.columns(6)
+with k1: st.markdown(f'<div class="kpi-card kpi-red"><div class="kpi-title">Quá hạn</div><div class="kpi-value">{n_over}</div><div class="kpi-sub">{worst_txt}</div></div>', unsafe_allow_html=True)
+with k2: st.markdown(f'<div class="kpi-card kpi-orange"><div class="kpi-title">&lt; 7 ngày</div><div class="kpi-value">{n_cam}</div><div class="kpi-sub">Cần xử lý hôm nay</div></div>', unsafe_allow_html=True)
+with k3: st.markdown(f'<div class="kpi-card kpi-amber"><div class="kpi-title">7–14 ngày</div><div class="kpi-value">{n_vang}</div><div class="kpi-sub">Theo dõi sát tiến độ</div></div>', unsafe_allow_html=True)
+with k4: st.markdown(f'<div class="kpi-card kpi-blue"><div class="kpi-title">14–21 ngày</div><div class="kpi-value">{n_blue}</div><div class="kpi-sub">Không chủ quan</div></div>', unsafe_allow_html=True)
+with k5: st.markdown(f'<div class="kpi-card kpi-green"><div class="kpi-title">An toàn</div><div class="kpi-value">{n_safe}</div><div class="kpi-sub">&gt; 21 ngày</div></div>', unsafe_allow_html=True)
+with k6: st.markdown(f'<div class="kpi-card kpi-black"><div class="kpi-title">Tổng tồn</div><div class="kpi-value">{n_open}</div><div class="kpi-sub">Chưa hoàn thành</div></div>', unsafe_allow_html=True)
+
+color_map = {'Quá hạn': '#ef4444', '< 7 ngày': '#f97316', '7–14 ngày': '#eab308', '14–21 ngày': '#3b82f6', 'An toàn': '#22c55e', 'Thiếu hạn': '#94a3b8'}
+risk_order = ['Quá hạn', '< 7 ngày', '7–14 ngày', '14–21 ngày', 'An toàn', 'Thiếu hạn']
+
+# -------------------------------------------------------------
+# 7. KHỐI BIỂU ĐỒ TRÒN & CỘT TỔNG QUAN
+# -------------------------------------------------------------
+st.markdown("---")
+c_left, c_right = st.columns([1.2, 0.8])
+
+with c_left:
+    st.markdown("##### Phân bổ đơn hàng theo Khách hàng & Mức rủi ro")
+    if not df_filtered.empty:
+        top_cust = df_filtered['Customer'].value_counts().head(12).index
+        c_counts = df_filtered[df_filtered['Customer'].isin(top_cust)].groupby(['Customer', 'Mức rủi ro']).size().reset_index(name='Số đơn')
+        c_counts['Mức rủi ro'] = pd.Categorical(c_counts['Mức rủi ro'], categories=risk_order, ordered=True)
+        c_counts = c_counts.sort_values(['Customer', 'Mức rủi ro'])
+
+        fig_bar = px.bar(c_counts, x='Customer', y='Số đơn', color='Mức rủi ro', color_discrete_map=color_map, text='Số đơn', category_orders={"Mức rủi ro": risk_order})
+        fig_bar.update_layout(margin=dict(l=10, r=10, t=10, b=10), height=260, yaxis=dict(title='Số đơn'), xaxis=dict(title='Khách hàng', categoryorder='total descending'), barmode='stack', showlegend=False)
+        fig_bar.update_traces(textposition='inside', insidetextanchor='middle')
+        st.plotly_chart(fig_bar, use_container_width=True)
+    else: st.info("Không có dữ liệu để hiển thị biểu đồ.")
+
+with c_right:
+    st.markdown("##### Tỷ lệ phân bổ rủi ro tổng thể")
+    if not df_filtered.empty:
+        risk_counts = df_filtered['Mức rủi ro'].value_counts().reset_index()
+        risk_counts.columns = ['Mức rủi ro', 'Số lượng']
+        risk_counts['Mức rủi ro'] = pd.Categorical(risk_counts['Mức rủi ro'], categories=risk_order, ordered=True)
+        risk_counts = risk_counts.sort_values('Mức rủi ro')
+
+        fig_donut = px.pie(risk_counts, values='Số lượng', names='Mức rủi ro', color='Mức rủi ro', color_discrete_map=color_map, hole=0.55, category_orders={"Mức rủi ro": risk_order})
+        fig_donut.update_traces(sort=False)
+        fig_donut.update_layout(margin=dict(l=10, r=10, t=10, b=10), height=260, legend=dict(traceorder='normal'))
+        st.plotly_chart(fig_donut, use_container_width=True)
+    else: st.info("Không có dữ liệu để hiển thị.")
+
+
+# -------------------------------------------------------------
+# 7.5 KHỐI BIỂU ĐỒ PARETO
+# -------------------------------------------------------------
+st.markdown("---")
+st.markdown("##### 📈 Phân tích Pareto Khách hàng (Quy tắc 80/20)")
+p_col1, p_col2 = st.columns(2)
+
+if not df_filtered.empty:
+    df_pareto_order = df_filtered.groupby('Customer').size().reset_index(name='Số đơn').sort_values(by='Số đơn', ascending=False)
+    df_pareto_order['Lũy kế (%)'] = df_pareto_order['Số đơn'].cumsum() / df_pareto_order['Số đơn'].sum() * 100
+
+    fig_p1 = go.Figure()
+    fig_p1.add_trace(go.Bar(x=df_pareto_order['Customer'], y=df_pareto_order['Số đơn'], name='Số đơn', marker_color='#3b82f6'))
+    fig_p1.add_trace(go.Scatter(x=df_pareto_order['Customer'], y=df_pareto_order['Lũy kế (%)'], name='Lũy kế %', yaxis='y2', mode='lines+markers', line=dict(color='#ef4444', width=2)))
+    fig_p1.update_layout(
+        title="Khách hàng có nhiều đơn hàng (MQL) nhất", yaxis=dict(title='Số đơn'), yaxis2=dict(title='Lũy kế (%)', overlaying='y', side='right', range=[0, 115]),
+        legend=dict(orientation="h", yanchor="bottom", y=1.05, xanchor="right", x=1, bgcolor='rgba(0,0,0,0)'), margin=dict(l=10, r=10, t=50, b=10), height=320
+    )
+
+    df_qty = df_filtered.copy()
+    df_qty['Qty_num'] = pd.to_numeric(df_qty['Qty'], errors='coerce').fillna(0)
+    df_pareto_qty = df_qty.groupby('Customer')['Qty_num'].sum().reset_index(name='Tổng Qty').sort_values(by='Tổng Qty', ascending=False)
+    df_pareto_qty = df_pareto_qty[df_pareto_qty['Tổng Qty'] > 0]
+    df_pareto_qty['Lũy kế (%)'] = df_pareto_qty['Tổng Qty'].cumsum() / df_pareto_qty['Tổng Qty'].sum() * 100
+
+    fig_p2 = go.Figure()
+    if not df_pareto_qty.empty:
+        fig_p2.add_trace(go.Bar(x=df_pareto_qty['Customer'], y=df_pareto_qty['Tổng Qty'], name='Tổng Qty', marker_color='#10b981'))
+        fig_p2.add_trace(go.Scatter(x=df_pareto_qty['Customer'], y=df_pareto_qty['Lũy kế (%)'], name='Lũy kế %', yaxis='y2', mode='lines+markers', line=dict(color='#ef4444', width=2)))
+        fig_p2.update_layout(
+            title="Khách hàng có khối lượng chi tiết (Qty) cao nhất", yaxis=dict(title='Tổng Qty'), yaxis2=dict(title='Lũy kế (%)', overlaying='y', side='right', range=[0, 115]),
+            legend=dict(orientation="h", yanchor="bottom", y=1.05, xanchor="right", x=1, bgcolor='rgba(0,0,0,0)'), margin=dict(l=10, r=10, t=50, b=10), height=320
+        )
+
+    with p_col1: st.plotly_chart(fig_p1, use_container_width=True)
+    with p_col2:
+        if not df_pareto_qty.empty: st.plotly_chart(fig_p2, use_container_width=True)
+        else: st.info("Không có dữ liệu số lượng Qty hợp lệ.")
+else: st.info("Không có dữ liệu để vẽ biểu đồ Pareto.")
+
+st.markdown("---")
+
+# -------------------------------------------------------------
+# 8. BIỂU ĐỒ GANTT LỊCH TRÌNH CHẠY MÁY NỐI TIẾP
+# -------------------------------------------------------------
+st.markdown("##### 📅 Lịch trình chạy máy liên tục (Gantt Chart)")
+
+if 'Start' in df_filtered.columns and not df_filtered.empty:
+    df_gantt = df_filtered[df_filtered['Machine Name'].isin(FACTORY_MACHINES)].dropna(subset=['Start', 'End']).copy()
+    
+    if not df_gantt.empty:
+        df_gantt['Machine Name'] = pd.Categorical(df_gantt['Machine Name'], categories=FACTORY_MACHINES, ordered=True)
+        df_gantt = df_gantt.sort_values(by=['Machine Name', 'Start'])
+        
+        fig_gantt = px.timeline(
+            df_gantt, x_start='Start', x_end='End', y='Machine Name', color='Mức rủi ro', color_discrete_map=color_map,
+            hover_name='Job Order', hover_data={'Customer': True, 'Status': True, 'Qty': True, 'Mã rút gọn': False, 'Mức rủi ro': False, 'Machine Name': False},
+            text='Mã rút gọn', category_orders={"Machine Name": FACTORY_MACHINES, "Mức rủi ro": risk_order}
+        )
+        
+        fig_gantt.update_yaxes(autorange="reversed", categoryorder="array", categoryarray=FACTORY_MACHINES, title="", tickfont=dict(size=14, weight="bold"))
+        fig_gantt.update_xaxes(title="Trục thời gian")
+        fig_gantt.update_layout(height=max(450, len(FACTORY_MACHINES) * 38), margin=dict(l=10, r=10, t=30, b=10), showlegend=True, legend_title_text='Mức rủi ro')
+        fig_gantt.update_traces(textfont=dict(size=14, color='white', weight='bold'), textposition='inside', insidetextanchor='middle')
+        st.plotly_chart(fig_gantt, use_container_width=True)
+    else: st.info("⚠️ Không có dữ liệu lịch chạy hợp lệ để vẽ biểu đồ.")
+else: st.error("❌ Không tìm thấy cột chứa dữ liệu ngày tháng trong file Excel của bạn.")
+
+st.markdown("---")
+
+# -------------------------------------------------------------
+# 9. KHỐI: THẺ TRẠNG THÁI MÁY CHI TIẾT
+# -------------------------------------------------------------
+st.markdown("##### ⚙️ Trạng thái Máy & Dự kiến rảnh máy *(Load dữ liệu từ cột Start & End Date)*")
+
+m_cols = st.columns(4)
+for idx, m_code in enumerate(FACTORY_MACHINES):
+    col = m_cols[idx % 4]
+    mach_orders = df_open[df_open['Machine Name'] == m_code].copy()
+    m_run = mach_orders[mach_orders['Status'].astype(str).str.strip().str.lower() == 'running']
+    m_wait = mach_orders[mach_orders['Status'].astype(str).str.strip().str.lower() == 'waiting']
+    
+    crit_count = len(mach_orders[mach_orders['Mức rủi ro'].isin(['Quá hạn', '< 7 ngày'])])
+    m_info = MACHINE_DETAILS.get(m_code, {"a": "—", "b": "—", "note": ""})
+    
+    if not m_run.empty: curr_row = m_run.iloc[0]; mql_name = curr_row['Job Order']; sub_info = f"BV: {curr_row['Drawing No.']} · SL: {curr_row['Qty']}"
+    else: mql_name = "(Chưa có lệnh Running)"; sub_info = "Máy đang trống trạng thái Running"
+    
+    free_date_text = "Chưa xếp lịch"
+    raw_val = machine_free_dates.get(m_code, None)
+    if raw_val is not None and str(raw_val).strip() != '':
+        if isinstance(raw_val, (datetime, date, pd.Timestamp)): free_date_text = raw_val.strftime('%d/%m')
+        else:
+            val_str = str(raw_val).strip()
+            if re.match(r'^\d{4}-\d{2}-\d{2}', val_str):
+                try: free_date_text = pd.to_datetime(val_str[:10], errors='coerce', dayfirst=True).strftime('%d/%m')
+                except: free_date_text = val_str[:10]
+            elif '-' in val_str: free_date_text = val_str.split('-')[-1].strip()
+            else: free_date_text = val_str
+
+    if crit_count > 0: cls_name = "crit"; badge = f'<span class="badge-red">{crit_count} rủi ro</span>'
+    elif "hết hàng" in m_info["note"].lower() or (m_run.empty and m_wait.empty): cls_name = "idle"; badge = '<span class="badge-gry">Rảnh máy</span>'
+    elif m_info["note"]: cls_name = "warn"; badge = '<span class="badge-org">Lưu ý</span>'
+    else: cls_name = ""; badge = '<span class="badge-grn">OK</span>'
+        
+    note_html = f'<div style="font-size:10.5px; color:#f59e0b !important; margin-top:3px; font-style:italic;">{m_info["note"]}</div>' if m_info["note"] else ''
+    
+    with col:
+        st.markdown(f"""<div class="m-card {cls_name}">
+<div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid rgba(128,128,128,0.2); padding-bottom:5px; margin-bottom:6px;">
+<span class="mach-badge">{m_code}</span>{badge}
+</div>
+<div style="font-size:10px; text-transform:uppercase; opacity:0.7; margin-top:5px; letter-spacing:0.5px;">Đang chạy:</div>
+<div style="font-family:ui-monospace, Consolas, monospace; font-size:12.5px; color:var(--primary-color) !important; font-weight:700; word-break:break-all; margin-top:1px;">{mql_name}</div>
+<div style="font-size:11px; color:var(--text-color) !important; opacity:0.85; margin-top:1px;">{sub_info}</div>
+<div style="margin-top:8px; padding-top:6px; border-top:1px dashed rgba(128,128,128,0.2); display:flex; justify-content:space-between; align-items:center;">
+<div style="font-size:11px; color:var(--text-color) !important; opacity:0.9;">Đợi: <b>{len(m_wait)} lệnh</b></div>
+<div style="font-size:11px; color:#3b82f6 !important; font-weight:700; background:rgba(59, 130, 246, 0.1); padding:2px 6px; border-radius:4px;">Rảnh: {free_date_text}</div>
+</div>{note_html}</div>""", unsafe_allow_html=True)
+
+st.markdown("---")
+
+# -------------------------------------------------------------
+# 10. BẢNG DANH SÁCH CHI TIẾT
+# -------------------------------------------------------------
+st.markdown(f"##### Danh sách đơn có nguy cơ delay ({n_open} đơn chưa hoàn thành)")
+
+display_df = df_filtered.sort_values(by='Còn (ngày)', ascending=True).copy()
+table_cols = ['Còn (ngày)', 'Mức rủi ro', 'Customer', 'Job Order', 'Machine Name', 'PO', 'Hạn áp dụng', 'Status', 'Drawing No.', 'Qty']
+avail_cols = [c for c in table_cols if c in display_df.columns]
+tbl_out = display_df[avail_cols].rename(columns={'Customer': 'KH', 'Job Order': 'MQL', 'Machine Name': 'Máy', 'Drawing No.': 'Mã BV', 'Qty': 'SL', 'Status': 'Trạng thái'})
+
+if 'Hạn áp dụng' in tbl_out.columns:
+    tbl_out['Hạn áp dụng'] = pd.to_datetime(tbl_out['Hạn áp dụng']).dt.strftime('%d/%m/%Y').fillna('—')
+
+styler = tbl_out.style
+style_func = getattr(styler, 'map', getattr(styler, 'applymap', None))
+
+def color_risk(v):
+    if not isinstance(v, (int, float)): return ''
+    if v < 0: return 'color: #ef4444; font-weight: bold;'
+    if v < 7: return 'color: #f97316; font-weight: bold;'
+    if v <= 14: return 'color: #eab308; font-weight: bold;'
+    if v <= 21: return 'color: #3b82f6; font-weight: bold;'
+    return 'color: #22c55e; font-weight: bold;'
+
+st.dataframe(style_func(color_risk, subset=['Còn (ngày)']), use_container_width=True, height=450)
