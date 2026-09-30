@@ -1,3 +1,4 @@
+from zoneinfo import ZoneInfo
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -55,7 +56,8 @@ with h_col1:
 </div>""", unsafe_allow_html=True)
 with h_col2:
     st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
-    ref_date = st.date_input("Ngày tham chiếu phân tích", date(2026, 9, 24))
+    ref_date = st.date_input("Ngày tham chiếu phân tích",
+    datetime.now(ZoneInfo("Asia/Ho_Chi_Minh")).date())
 
 # -------------------------------------------------------------
 # 2. TỐI ƯU HÓA: AUTO-FIX LINK CHỐNG LỖI 404 & CHỐNG CHẶN BOT
@@ -66,25 +68,17 @@ def fetch_excel_from_url(gsheet_url_param):
         url = gsheet_url_param.strip()
         download_url = None
         
-        # 1. Thuật toán tự động sửa lỗi Link
         if "/e/" in url:
-            # Link công bố lên web (Publish to web)
             base = url.split("?")[0]
-            # Nếu người dùng lỡ chọn "Trang web" (pubhtml), tự động sửa thành Excel (pub)
             if base.endswith("/pubhtml"):
                 base = base.replace("/pubhtml", "/pub")
             download_url = base + "?output=xlsx"
-            
         elif "/d/" in url:
-            # Link chia sẻ thông thường (Share -> Anyone with link)
-            # Trích xuất mã ID file
             file_id = url.split("/d/")[1].split("/")[0]
             download_url = f"https://docs.google.com/spreadsheets/d/{file_id}/export?format=xlsx"
-            
         else:
             return None, "Link không đúng định dạng Google Sheets."
 
-        # 2. Ngụy trang thành trình duyệt Chrome thật
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
@@ -95,7 +89,6 @@ def fetch_excel_from_url(gsheet_url_param):
         session = requests.Session()
         response = session.get(download_url, headers=headers, stream=True, allow_redirects=True)
         
-        # Xử lý cảnh báo file lớn (thường xuất hiện ở link Share)
         token = next((v for k, v in response.cookies.items() if k.startswith('download_warning')), None)
         if token:
             response = session.get(download_url + f"&confirm={token}", headers=headers, stream=True, allow_redirects=True)
@@ -138,6 +131,7 @@ else:
     gsheet_url = ("https://docs.google.com/spreadsheets/d/e/"
     "2PACX-1vTQOMzsXaj_Ed_ooA9x8LJ8NTkikDIBYVGs87h-ajD9FYjWHktL-MrzVcGqxFqRcFaNkTHzcH-xLARR/"
     "pub?output=xlsx")
+
     st.sidebar.caption("Nguồn dữ liệu: Master Plan SG")
     
     if gsheet_url:
@@ -481,8 +475,9 @@ for idx, m_code in enumerate(FACTORY_MACHINES):
             elif '-' in val_str: free_date_text = val_str.split('-')[-1].strip()
             else: free_date_text = val_str
 
+    # ĐÃ SỬA LỖI ÉP TRẠNG THÁI "RẢNH MÁY" CHO TC2, TC3
     if crit_count > 0: cls_name = "crit"; badge = f'<span class="badge-red">{crit_count} rủi ro</span>'
-    elif "hết hàng" in m_info["note"].lower() or (m_run.empty and m_wait.empty): cls_name = "idle"; badge = '<span class="badge-gry">Rảnh máy</span>'
+    elif m_run.empty and m_wait.empty: cls_name = "idle"; badge = '<span class="badge-gry">Rảnh máy</span>'
     elif m_info["note"]: cls_name = "warn"; badge = '<span class="badge-org">Lưu ý</span>'
     else: cls_name = ""; badge = '<span class="badge-grn">OK</span>'
         
