@@ -135,12 +135,9 @@ if data_source == "Tải file Excel từ máy":
         raw_file_bytes = uploaded_file.getvalue()
 else:
     st.sidebar.info("💡 Bạn có thể dán Link Công bố (Publish) hoặc Link Chia sẻ (Share) đều được. Hệ thống sẽ tự động xử lý.")
-    gsheet_url = (
-    "https://docs.google.com/spreadsheets/d/e/"
+    gsheet_url = ("https://docs.google.com/spreadsheets/d/e/"
     "2PACX-1vTQOMzsXaj_Ed_ooA9x8LJ8NTkikDIBYVGs87h-ajD9FYjWHktL-MrzVcGqxFqRcFaNkTHzcH-xLARR/"
-    "pub?output=xlsx"
-)
-
+    "pub?output=xlsx")
 st.sidebar.caption("Nguồn dữ liệu: Master Plan SG")
     
     if gsheet_url:
