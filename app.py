@@ -58,11 +58,12 @@ with h_col2:
     ref_date = st.date_input("Ngày tham chiếu phân tích", date(2026, 9, 24))
 
 # -------------------------------------------------------------
-# 2. TỐI ƯU HÓA: CACHE KHÂU TẢI DỮ LIỆU & SESSION_STATE NHỚ LINK
+# 2. TỐI ƯU HÓA: CƠ CHẾ NGỤY TRANG (USER-AGENT) VƯỢT TƯỜNG LỬA GOOGLE
 # -------------------------------------------------------------
 @st.cache_data(show_spinner=False, ttl=600) 
 def fetch_excel_from_url(gsheet_url_param):
     try:
+        # Chuẩn hóa link
         if "/e/" in gsheet_url_param and "pub" in gsheet_url_param:
             download_url = gsheet_url_param.split("?")[0] + "?output=xlsx"
         elif "spreadsheets/d/" in gsheet_url_param:
@@ -75,30 +76,42 @@ def fetch_excel_from_url(gsheet_url_param):
             download_url = gsheet_url_param
 
         if download_url:
+            # NGỤY TRANG THÀNH TRÌNH DUYỆT CHROME ĐỂ GOOGLE KHÔNG CHẶN
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+                'Accept-Language': 'vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7',
+                'Connection': 'keep-alive'
+            }
+            
             session = requests.Session()
-            response = session.get(download_url, stream=True)
+            response = session.get(download_url, headers=headers, stream=True, allow_redirects=True)
+            
+            # Xử lý cảnh báo file lớn của Google Drive (nếu có)
             token = next((v for k, v in response.cookies.items() if k.startswith('download_warning')), None)
             if token:
-                response = session.get(download_url + f"&confirm={token}", stream=True)
-            if response.status_code == 200 and "text/html" not in response.headers.get("Content-Type", ""):
-                return response.content, None
+                response = session.get(download_url + f"&confirm={token}", headers=headers, stream=True, allow_redirects=True)
+                
+            if response.status_code == 200:
+                content_type = response.headers.get("Content-Type", "")
+                if "text/html" in content_type:
+                    return None, "Lỗi: Google trả về trang web HTML thay vì file Excel. Khả năng cao do quyền truy cập bị chặn."
+                else:
+                    return response.content, None
             else:
-                return None, "Lỗi tải file. Google chặn quyền truy cập hoặc link sai."
+                return None, f"Lỗi HTTP {response.status_code}: Không thể truy cập máy chủ Google."
         return None, "Link không hợp lệ."
     except Exception as e:
         return None, f"Lỗi mạng: {e}"
 
 st.sidebar.header("📁 Cập nhật kế hoạch")
 
-# Khởi tạo bộ nhớ tạm để ghim chặt link Google Sheets
 if "saved_link" not in st.session_state:
     st.session_state["saved_link"] = ""
 
-# Khi bấm nút này, chỉ xóa Cache tải file, Streamlit sẽ tự động chạy lại từ đầu và giữ nguyên link
 if st.sidebar.button("🔄 Làm mới dữ liệu (Tải lại từ đầu)", type="primary"):
     st.cache_data.clear()
 
-# Đã đưa "Dùng Link Google Sheets/Drive" lên làm lựa chọn mặc định
 data_source = st.sidebar.radio(
     "Chọn phương thức tải dữ liệu:", 
     ("Dùng Link Google Sheets/Drive", "Tải file Excel từ máy")
@@ -112,8 +125,6 @@ if data_source == "Tải file Excel từ máy":
         raw_file_bytes = uploaded_file.getvalue()
 else:
     st.sidebar.info("💡 Lời khuyên: Dùng tính năng **Tệp > Chia sẻ > Công bố lên web** dạng Excel để lấy link chống chặn.")
-    
-    # Gắn key="saved_link" để Streamlit tự động lưu và nhớ link mỗi khi trang được làm mới
     gsheet_url = st.sidebar.text_input("Dán Link vào đây:", key="saved_link")
     
     if gsheet_url:
