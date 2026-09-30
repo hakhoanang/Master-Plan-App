@@ -58,49 +58,59 @@ with h_col2:
     ref_date = st.date_input("Ngày tham chiếu phân tích", date(2026, 9, 24))
 
 # -------------------------------------------------------------
-# 2. TỐI ƯU HÓA: CƠ CHẾ NGỤY TRANG (USER-AGENT) VƯỢT TƯỜNG LỬA GOOGLE
+# 2. TỐI ƯU HÓA: AUTO-FIX LINK CHỐNG LỖI 404 & CHỐNG CHẶN BOT
 # -------------------------------------------------------------
 @st.cache_data(show_spinner=False, ttl=600) 
 def fetch_excel_from_url(gsheet_url_param):
     try:
-        # Chuẩn hóa link
-        if "/e/" in gsheet_url_param and "pub" in gsheet_url_param:
-            download_url = gsheet_url_param.split("?")[0] + "?output=xlsx"
-        elif "spreadsheets/d/" in gsheet_url_param:
-            match = re.search(r"/d/([a-zA-Z0-9-_]+)", gsheet_url_param)
-            download_url = f"https://docs.google.com/spreadsheets/d/{match.group(1)}/export?format=xlsx" if match else None
-        elif "drive.google.com" in gsheet_url_param:
-            match = re.search(r"/d/([a-zA-Z0-9-_]+)", gsheet_url_param) or re.search(r"id=([a-zA-Z0-9-_]+)", gsheet_url_param)
-            download_url = f"https://drive.google.com/uc?export=download&id={match.group(1)}" if match else None
+        url = gsheet_url_param.strip()
+        download_url = None
+        
+        # 1. Thuật toán tự động sửa lỗi Link
+        if "/e/" in url:
+            # Link công bố lên web (Publish to web)
+            base = url.split("?")[0]
+            # Nếu người dùng lỡ chọn "Trang web" (pubhtml), tự động sửa thành Excel (pub)
+            if base.endswith("/pubhtml"):
+                base = base.replace("/pubhtml", "/pub")
+            download_url = base + "?output=xlsx"
+            
+        elif "/d/" in url:
+            # Link chia sẻ thông thường (Share -> Anyone with link)
+            # Trích xuất mã ID file
+            file_id = url.split("/d/")[1].split("/")[0]
+            download_url = f"https://docs.google.com/spreadsheets/d/{file_id}/export?format=xlsx"
+            
         else:
-            download_url = gsheet_url_param
+            return None, "Link không đúng định dạng Google Sheets."
 
-        if download_url:
-            # NGỤY TRANG THÀNH TRÌNH DUYỆT CHROME ĐỂ GOOGLE KHÔNG CHẶN
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-                'Accept-Language': 'vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7',
-                'Connection': 'keep-alive'
-            }
+        # 2. Ngụy trang thành trình duyệt Chrome thật
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+            'Accept-Language': 'vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Connection': 'keep-alive'
+        }
+        
+        session = requests.Session()
+        response = session.get(download_url, headers=headers, stream=True, allow_redirects=True)
+        
+        # Xử lý cảnh báo file lớn (thường xuất hiện ở link Share)
+        token = next((v for k, v in response.cookies.items() if k.startswith('download_warning')), None)
+        if token:
+            response = session.get(download_url + f"&confirm={token}", headers=headers, stream=True, allow_redirects=True)
             
-            session = requests.Session()
-            response = session.get(download_url, headers=headers, stream=True, allow_redirects=True)
-            
-            # Xử lý cảnh báo file lớn của Google Drive (nếu có)
-            token = next((v for k, v in response.cookies.items() if k.startswith('download_warning')), None)
-            if token:
-                response = session.get(download_url + f"&confirm={token}", headers=headers, stream=True, allow_redirects=True)
-                
-            if response.status_code == 200:
-                content_type = response.headers.get("Content-Type", "")
-                if "text/html" in content_type:
-                    return None, "Lỗi: Google trả về trang web HTML thay vì file Excel. Khả năng cao do quyền truy cập bị chặn."
-                else:
-                    return response.content, None
+        if response.status_code == 200:
+            content_type = response.headers.get("Content-Type", "")
+            if "text/html" in content_type:
+                return None, "Lỗi: Google chặn quyền (File chưa được Share hoặc Công bố công khai)."
             else:
-                return None, f"Lỗi HTTP {response.status_code}: Không thể truy cập máy chủ Google."
-        return None, "Link không hợp lệ."
+                return response.content, None
+        elif response.status_code == 404:
+            return None, "Lỗi HTTP 404: Không tìm thấy file. Link có thể đã bị xóa hoặc sai mã."
+        else:
+            return None, f"Lỗi HTTP {response.status_code}: Không thể tải file từ máy chủ Google."
+            
     except Exception as e:
         return None, f"Lỗi mạng: {e}"
 
@@ -124,7 +134,7 @@ if data_source == "Tải file Excel từ máy":
     if uploaded_file:
         raw_file_bytes = uploaded_file.getvalue()
 else:
-    st.sidebar.info("💡 Lời khuyên: Dùng tính năng **Tệp > Chia sẻ > Công bố lên web** dạng Excel để lấy link chống chặn.")
+    st.sidebar.info("💡 Bạn có thể dán Link Công bố (Publish) hoặc Link Chia sẻ (Share) đều được. Hệ thống sẽ tự động xử lý.")
     gsheet_url = st.sidebar.text_input("Dán Link vào đây:", key="saved_link")
     
     if gsheet_url:
@@ -267,7 +277,7 @@ else:
     df_raw, machine_free_dates = pd.DataFrame(), {}
 
 if df_raw.empty:
-    st.info("👋 Vui lòng Tải file Excel hoặc Dán link 'Công bố lên web' ở thanh menu bên trái để bắt đầu.")
+    st.info("👋 Vui lòng Tải file Excel hoặc Dán link chia sẻ/công bố ở thanh menu bên trái để bắt đầu.")
     st.stop()
 
 df_open = df_raw[~df_raw['Status'].astype(str).str.strip().str.lower().isin(['done', 'services'])].copy()
