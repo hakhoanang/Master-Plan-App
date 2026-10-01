@@ -235,6 +235,11 @@ def load_and_preprocess_data(file_source_bytes, ref_dt_str):
     if not dfs: return pd.DataFrame(), {}
     res = pd.concat(dfs, ignore_index=True)
     
+    # --- ĐOẠN CODE MỚI BỔ SUNG: Dịch chính xác giờ phút giây ---
+    date_col_final = next((col for col in res.columns if 'start & end' in col.lower()), None)
+    if date_col_final:
+        res['Real_Start'] = pd.to_datetime(res[date_col_final], errors='coerce', dayfirst=True)
+    
     res['Customer'] = res['Job Order'].str.extract(r'^([A-Za-z]+)')[0].fillna('—').str.upper()
     res['Machine Name'] = res['Machine Name'].fillna('—').astype(str).str.strip()
     res['PO'] = res['PO'].fillna('—').astype(str).str.strip()
@@ -313,7 +318,7 @@ worst_over = df_filtered[df_filtered['Mức rủi ro'] == 'Quá hạn'].sort_val
 worst_txt = f"Trễ nhất: {worst_over.iloc[0]['Job Order']} ({-worst_over.iloc[0]['Còn (ngày)']} ngày)" if not worst_over.empty else "Không có"
 
 df_summary = pd.DataFrame({
-    "Ngày xuất": [datetime.now().strftime("%d/%m/%Y")],
+    "Ngày xuất": [datetime.now(ZoneInfo("Asia/Ho_Chi_Minh")).strftime("%d/%m/%Y %H:%M")],
     "Số đơn quá hạn": [n_over], "< 7 ngày (Cần xử lý)": [n_cam], "7-14 ngày (Theo dõi)": [n_vang],
     "14-21 ngày (Không chủ quan)": [n_blue], "> 21 ngày (An toàn)": [n_safe], "Tổng đơn chưa hoàn thành": [n_open]
 })
@@ -327,7 +332,7 @@ def convert_summary_to_excel(df):
 btn_col1, btn_col2 = st.columns([7, 2])
 with btn_col1: st.markdown("##### 📊 TỔNG QUAN CHỈ SỐ RỦI RO")
 with btn_col2:
-    st.download_button(label="📥 Tải thống kê KPI (Excel)", data=convert_summary_to_excel(df_summary), file_name=f"ThongKe_KPI_{datetime.now().strftime('%Y%m%d')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+    st.download_button(label="📥 Tải thống kê KPI (Excel)", data=convert_summary_to_excel(df_summary), file_name=f"ThongKe_KPI_{datetime.now(ZoneInfo('Asia/Ho_Chi_Minh')).strftime('%Y%m%d_%H%M')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
 
 k1, k2, k3, k4, k5, k6 = st.columns(6)
 with k1: st.markdown(f'<div class="kpi-card kpi-red"><div class="kpi-title">Quá hạn</div><div class="kpi-value">{n_over}</div><div class="kpi-sub">{worst_txt}</div></div>', unsafe_allow_html=True)
@@ -446,22 +451,51 @@ else: st.error("❌ Không tìm thấy cột chứa dữ liệu ngày tháng tro
 st.markdown("---")
 
 # -------------------------------------------------------------
-# 9. KHỐI: THẺ TRẠNG THÁI MÁY CHI TIẾT
+# 9. KHỐI: THẺ TRẠNG THÁI MÁY CHI TIẾT (BỎ TRẠNG THÁI RUNNING)
 # -------------------------------------------------------------
-st.markdown("##### ⚙️ Trạng thái Máy & Dự kiến rảnh máy *(Load dữ liệu từ cột Start & End Date)*")
+st.markdown("##### ⚙️️ Trạng thái Máy & Dự kiến rảnh máy *(Load dữ liệu từ cột Start & End Date)*")
+
+# Lấy giờ hệ thống theo múi giờ Việt Nam
+current_time_vn = datetime.now(ZoneInfo("Asia/Ho_Chi_Minh")).replace(tzinfo=None)
 
 m_cols = st.columns(4)
 for idx, m_code in enumerate(FACTORY_MACHINES):
     col = m_cols[idx % 4]
+    
+    # Lấy toàn bộ lệnh chưa Done của máy này
     mach_orders = df_open[df_open['Machine Name'] == m_code].copy()
-    m_run = mach_orders[mach_orders['Status'].astype(str).str.strip().str.lower() == 'running']
+    
+    # Vẫn đếm số lượng Waiting để điền vào "Đợi: X lệnh"
     m_wait = mach_orders[mach_orders['Status'].astype(str).str.strip().str.lower() == 'waiting']
     
     crit_count = len(mach_orders[mach_orders['Mức rủi ro'].isin(['Quá hạn', '< 7 ngày'])])
     m_info = MACHINE_DETAILS.get(m_code, {"a": "—", "b": "—", "note": ""})
     
-    if not m_run.empty: curr_row = m_run.iloc[0]; mql_name = curr_row['Job Order']; sub_info = f"BV: {curr_row['Drawing No.']} · SL: {curr_row['Qty']}"
-    else: mql_name = "(Chưa có lệnh Running)"; sub_info = "Máy đang trống trạng thái Running"
+    # --- LOGIC TÌM MÃ HÀNG ĐANG CHẠY DỰA THEO THỜI GIAN THỰC ---
+    curr_row = None
+    if not mach_orders.empty: 
+        if 'Real_Start' in mach_orders.columns:
+            valid_runs = mach_orders.dropna(subset=['Real_Start'])
+            if not valid_runs.empty:
+                # Tìm các mã có giờ Start <= Giờ hiện tại
+                started_runs = valid_runs[valid_runs['Real_Start'] <= current_time_vn]
+                if not started_runs.empty:
+                    # Lấy mã sát với giờ hiện tại nhất (mã dòng cuối cùng sau khi sort theo Start)
+                    curr_row = started_runs.sort_values(by='Real_Start').iloc[-1]
+                else:
+                    # Nếu tất cả các mã đều là ca tương lai (Start > Giờ hiện tại), lấy mã đầu tiên
+                    curr_row = valid_runs.sort_values(by='Real_Start').iloc[0]
+            else:
+                curr_row = mach_orders.iloc[0]
+        else:
+            curr_row = mach_orders.iloc[0]
+            
+        mql_name = curr_row['Job Order']
+        sub_info = f"BV: {curr_row['Drawing No.']} · SL: {curr_row['Qty']}"
+    else: 
+        mql_name = "(Chưa có lệnh)"
+        sub_info = "Máy đang trống"
+    # -------------------------------------------------------------
     
     free_date_text = "Chưa xếp lịch"
     raw_val = machine_free_dates.get(m_code, None)
@@ -475,9 +509,8 @@ for idx, m_code in enumerate(FACTORY_MACHINES):
             elif '-' in val_str: free_date_text = val_str.split('-')[-1].strip()
             else: free_date_text = val_str
 
-    # ĐÃ SỬA LỖI ÉP TRẠNG THÁI "RẢNH MÁY" CHO TC2, TC3
     if crit_count > 0: cls_name = "crit"; badge = f'<span class="badge-red">{crit_count} rủi ro</span>'
-    elif m_run.empty and m_wait.empty: cls_name = "idle"; badge = '<span class="badge-gry">Rảnh máy</span>'
+    elif mach_orders.empty: cls_name = "idle"; badge = '<span class="badge-gry">Rảnh máy</span>'
     elif m_info["note"]: cls_name = "warn"; badge = '<span class="badge-org">Lưu ý</span>'
     else: cls_name = ""; badge = '<span class="badge-grn">OK</span>'
         
