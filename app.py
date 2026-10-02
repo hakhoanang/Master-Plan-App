@@ -128,11 +128,15 @@ if data_source == "Tải file Excel từ máy":
         raw_file_bytes = uploaded_file.getvalue()
 else:
     st.sidebar.info("💡 Bạn có thể dán Link Công bố (Publish) hoặc Link Chia sẻ (Share) đều được. Hệ thống sẽ tự động xử lý.")
-    gsheet_url = ("https://docs.google.com/spreadsheets/d/e/"
-    "2PACX-1vTQOMzsXaj_Ed_ooA9x8LJ8NTkikDIBYVGs87h-ajD9FYjWHktL-MrzVcGqxFqRcFaNkTHzcH-xLARR/"
-    "pub?output=xlsx")
-
-    st.sidebar.caption("Nguồn dữ liệu: Master Plan SG")
+    gsheet_url = st.sidebar.text_input("Dán Link vào đây:", key="saved_link")
+    
+    # Auto-fill mặc định link của Master Plan SG nếu chưa có
+    if not gsheet_url and not st.session_state.get('user_changed_link', False):
+        gsheet_url = ("https://docs.google.com/spreadsheets/d/e/"
+                      "2PACX-1vTQOMzsXaj_Ed_ooA9x8LJ8NTkikDIBYVGs87h-ajD9FYjWHktL-MrzVcGqxFqRcFaNkTHzcH-xLARR/"
+                      "pub?output=xlsx")
+                      
+    st.sidebar.caption("Nguồn dữ liệu mặc định: Master Plan SG")
     
     if gsheet_url:
         with st.sidebar.status("Đang tải dữ liệu...", expanded=False) as status:
@@ -150,19 +154,20 @@ FACTORY_MACHINES = [
     "GD1", "GD2", "WC"
 ]
 
+# Database gốc (Dùng làm cơ sở mặc định, phần 'note' sẽ được ghi đè tự động từ Excel)
 MACHINE_DETAILS = {
-    "MA1": {"a": "TIÊN", "b": "VŨ", "note": "Hàng lắp nhiều dao → tăng thời gian"}, "MA2": {"a": "HẢI", "b": "TRẠNG", "note": "Máy hư sửa 9/9→12/09"},
-    "MA3": {"a": "B NAM", "b": "MẪN", "note": ""}, "MA4": {"a": "B NAM", "b": "MẪN", "note": "Sửa máy 17/08"},
-    "MA5": {"a": "NAM", "b": "LUÂN", "note": "Không chạy được dung sai <0,05 · hàng lẻ không ổn định"}, "MA6": {"a": "NAM", "b": "LUÂN", "note": ""},
-    "MA7": {"a": "KỲ", "b": "VINH", "note": ""}, "MA8": {"a": "HIỀN", "b": "MINH", "note": "Không chạy được dung sai <0,05"},
-    "MB1": {"a": "TIÊN", "b": "VŨ", "note": ""}, "MB2": {"a": "HẢI", "b": "TRẠNG", "note": "Hàng lẻ chạy không ổn định"},
-    "MB3": {"a": "THÀNH", "b": "THÔNG", "note": "Không chạy được dung sai <0,05"}, "MB4": {"a": "THÀNH", "b": "THÔNG", "note": ""},
-    "MB5": {"a": "NAM", "b": "LUÂN", "note": "Không chạy được dung sai <0,05 · máy hư 7/8–13/8"}, "MB6": {"a": "NAM", "b": "LUÂN", "note": "Không chạy được dung sai <0,05"},
-    "MB7": {"a": "KỲ", "b": "VINH", "note": "Sửa máy 17/08"}, "MB8": {"a": "HIỀN", "b": "MINH", "note": "Không chạy dung sai <0,05 · máy hư 7/8–13/8"},
-    "TC1": {"a": "HOÀNG", "b": "NAM (T)", "note": "Sửa máy 18/08–21/08"}, "TC2": {"a": "HOÀNG", "b": "NAM (T)", "note": "Máy hết hàng phù hợp"},
-    "TC3": {"a": "ĐỆ", "b": "KIỆT", "note": "Máy hết hàng phù hợp"}, "TD1": {"a": "ĐẠT", "b": "PHÚ", "note": "Máy hư 18/8→21/08 · sắp hết hàng"},
-    "TD2": {"a": "ĐẠT", "b": "PHÚ", "note": ""}, "GD1": {"a": "HỮU", "b": "—", "note": "Hàng lẻ chạy không ổn định · sắp hết hàng"},
-    "GD2": {"a": "HỮU", "b": "—", "note": "Rảnh máy kéo dài, chưa cấp lệnh mới"}, "WC": {"a": "—", "b": "—", "note": "Máy đang chờ cập nhật dữ liệu"}
+    "MA1": {"a": "TIÊN", "b": "VŨ", "note": ""}, "MA2": {"a": "HẢI", "b": "TRẠNG", "note": ""},
+    "MA3": {"a": "B NAM", "b": "MẪN", "note": ""}, "MA4": {"a": "B NAM", "b": "MẪN", "note": ""},
+    "MA5": {"a": "NAM", "b": "LUÂN", "note": ""}, "MA6": {"a": "NAM", "b": "LUÂN", "note": ""},
+    "MA7": {"a": "KỲ", "b": "VINH", "note": ""}, "MA8": {"a": "HIỀN", "b": "MINH", "note": ""},
+    "MB1": {"a": "TIÊN", "b": "VŨ", "note": ""}, "MB2": {"a": "HẢI", "b": "TRẠNG", "note": ""},
+    "MB3": {"a": "THÀNH", "b": "THÔNG", "note": ""}, "MB4": {"a": "THÀNH", "b": "THÔNG", "note": ""},
+    "MB5": {"a": "NAM", "b": "LUÂN", "note": ""}, "MB6": {"a": "NAM", "b": "LUÂN", "note": ""},
+    "MB7": {"a": "KỲ", "b": "VINH", "note": ""}, "MB8": {"a": "HIỀN", "b": "MINH", "note": ""},
+    "TC1": {"a": "HOÀNG", "b": "NAM (T)", "note": ""}, "TC2": {"a": "HOÀNG", "b": "NAM (T)", "note": ""},
+    "TC3": {"a": "ĐỆ", "b": "KIỆT", "note": ""}, "TD1": {"a": "ĐẠT", "b": "PHÚ", "note": ""},
+    "TD2": {"a": "ĐẠT", "b": "PHÚ", "note": ""}, "GD1": {"a": "HỮU", "b": "—", "note": ""},
+    "GD2": {"a": "HỮU", "b": "—", "note": ""}, "WC": {"a": "—", "b": "—", "note": ""}
 }
 
 # -------------------------------------------------------------
@@ -204,10 +209,32 @@ def load_and_preprocess_data(file_source_bytes, ref_dt_str):
     configs = [('1. MP MILLING', 3, 'Phay'), ('2. MP TURNING', 5, 'Tiện'), ('3. MP GRINDING', 3, 'Mài')]
     dfs = []
     free_dates = {}
+    dynamic_notes = {}
     
     try: xls = pd.ExcelFile(io.BytesIO(file_source_bytes))
-    except: return pd.DataFrame(), {}
-        
+    except: return pd.DataFrame(), {}, {}
+    
+    # ĐỌC GHI CHÚ (NOTE) TỰ ĐỘNG TỪ SHEET "MACHINE&ABILITY"
+    if 'MACHINE&ABILITY' in xls.sheet_names:
+        try:
+            df_mach = pd.read_excel(xls, sheet_name='MACHINE&ABILITY', header=None)
+            for idx in range(6, len(df_mach)): 
+                if df_mach.shape[1] > 1: 
+                    m_name = str(df_mach.iloc[idx, 1]).strip()
+                    if m_name and m_name.lower() != 'nan':
+                        note_str = ""
+                        try:
+                            val = df_mach.iloc[idx, 16]
+                            if pd.notna(val):
+                                note_str = str(val).strip()
+                                if note_str.lower() == 'nan': note_str = ""
+                        except IndexError:
+                            pass 
+                        dynamic_notes[m_name] = note_str
+        except Exception as e:
+            pass 
+            
+    # Đọc dữ liệu 3 xưởng
     for sname, h_idx, ws in configs:
         if sname in xls.sheet_names:
             df = pd.read_excel(xls, sheet_name=sname, header=h_idx)
@@ -232,10 +259,9 @@ def load_and_preprocess_data(file_source_bytes, ref_dt_str):
                 df['Workshop'] = ws
                 dfs.append(df)
                 
-    if not dfs: return pd.DataFrame(), {}
+    if not dfs: return pd.DataFrame(), {}, dynamic_notes
     res = pd.concat(dfs, ignore_index=True)
     
-    # --- ĐOẠN CODE MỚI BỔ SUNG: Dịch chính xác giờ phút giây ---
     date_col_final = next((col for col in res.columns if 'start & end' in col.lower()), None)
     if date_col_final:
         res['Real_Start'] = pd.to_datetime(res[date_col_final], errors='coerce', dayfirst=True)
@@ -271,12 +297,19 @@ def load_and_preprocess_data(file_source_bytes, ref_dt_str):
         res.loc[res['Start'] == res['End'], 'End'] += pd.Timedelta(hours=23, minutes=59)
         res['Mã rút gọn'] = res['Job Order'].astype(str).str[:3].str.upper()
 
-    return res, free_dates
+    return res, free_dates, dynamic_notes
 
 if raw_file_bytes is not None:
-    df_raw, machine_free_dates = load_and_preprocess_data(raw_file_bytes, str(ref_date))
+    df_raw, machine_free_dates, parsed_notes = load_and_preprocess_data(raw_file_bytes, str(ref_date))
+    
+    # Tự động cập nhật Ghi chú vào Danh sách Máy gốc
+    for m_code, text_note in parsed_notes.items():
+        if m_code in MACHINE_DETAILS:
+            MACHINE_DETAILS[m_code]["note"] = text_note
+        else:
+            MACHINE_DETAILS[m_code] = {"a": "—", "b": "—", "note": text_note}
 else:
-    df_raw, machine_free_dates = pd.DataFrame(), {}
+    df_raw, machine_free_dates, parsed_notes = pd.DataFrame(), {}, {}
 
 if df_raw.empty:
     st.info("👋 Vui lòng Tải file Excel hoặc Dán link chia sẻ/công bố ở thanh menu bên trái để bắt đầu.")
@@ -430,6 +463,27 @@ st.markdown("##### 📅 Lịch trình chạy máy liên tục (Gantt Chart)")
 if 'Start' in df_filtered.columns and not df_filtered.empty:
     df_gantt = df_filtered[df_filtered['Machine Name'].isin(FACTORY_MACHINES)].dropna(subset=['Start', 'End']).copy()
     
+    # --- BỔ SUNG TỰ ĐỘNG CHÈN MÁY TRỐNG LÊN GANTT CHART ---
+    existing_machines = df_gantt['Machine Name'].unique()
+    missing_machines = [m for m in FACTORY_MACHINES if m not in existing_machines]
+    
+    if missing_machines:
+        dummy_records = []
+        for m in missing_machines:
+            dummy_records.append({
+                'Machine Name': m,
+                'Start': pd.to_datetime(ref_date),
+                'End': pd.to_datetime(ref_date) + pd.Timedelta(minutes=1), # Tạo 1 vạch siêu mỏng
+                'Mức rủi ro': 'Thiếu hạn', # Dùng màu xám nhạt (Idle)
+                'Job Order': 'Chưa xếp lịch',
+                'Customer': '—',
+                'Status': '—',
+                'Qty': 0,
+                'Mã rút gọn': ' ' # Không hiển thị chữ lên vạch
+            })
+        df_gantt = pd.concat([df_gantt, pd.DataFrame(dummy_records)], ignore_index=True)
+    # --------------------------------------------------------
+
     if not df_gantt.empty:
         df_gantt['Machine Name'] = pd.Categorical(df_gantt['Machine Name'], categories=FACTORY_MACHINES, ordered=True)
         df_gantt = df_gantt.sort_values(by=['Machine Name', 'Start'])
@@ -453,7 +507,7 @@ st.markdown("---")
 # -------------------------------------------------------------
 # 9. KHỐI: THẺ TRẠNG THÁI MÁY CHI TIẾT (BỎ TRẠNG THÁI RUNNING)
 # -------------------------------------------------------------
-st.markdown("##### ⚙️️ Trạng thái Máy & Dự kiến rảnh máy *(Load dữ liệu từ cột Start & End Date)*")
+st.markdown("##### ⚙ Trạng thái Máy & Dự kiến rảnh máy *(Load dữ liệu từ cột Start & End Date)*")
 
 # Lấy giờ hệ thống theo múi giờ Việt Nam
 current_time_vn = datetime.now(ZoneInfo("Asia/Ho_Chi_Minh")).replace(tzinfo=None)
