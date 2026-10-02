@@ -130,7 +130,6 @@ else:
     st.sidebar.info("💡 Bạn có thể dán Link Công bố (Publish) hoặc Link Chia sẻ (Share) đều được. Hệ thống sẽ tự động xử lý.")
     gsheet_url = st.sidebar.text_input("Dán Link vào đây:", key="saved_link")
     
-    # Auto-fill mặc định link của Master Plan SG nếu chưa có
     if not gsheet_url and not st.session_state.get('user_changed_link', False):
         gsheet_url = ("https://docs.google.com/spreadsheets/d/e/"
                       "2PACX-1vTQOMzsXaj_Ed_ooA9x8LJ8NTkikDIBYVGs87h-ajD9FYjWHktL-MrzVcGqxFqRcFaNkTHzcH-xLARR/"
@@ -154,7 +153,6 @@ FACTORY_MACHINES = [
     "GD1", "GD2", "WC"
 ]
 
-# Database gốc (Dùng làm cơ sở mặc định, phần 'note' sẽ được ghi đè tự động từ Excel)
 MACHINE_DETAILS = {
     "MA1": {"a": "TIÊN", "b": "VŨ", "note": ""}, "MA2": {"a": "HẢI", "b": "TRẠNG", "note": ""},
     "MA3": {"a": "B NAM", "b": "MẪN", "note": ""}, "MA4": {"a": "B NAM", "b": "MẪN", "note": ""},
@@ -174,6 +172,10 @@ MACHINE_DETAILS = {
 # 3. HÀM ĐỌC DỮ LIỆU & LẤY NGÀY NỐI ĐUÔI
 # -------------------------------------------------------------
 def parse_gantt_dates(val, ref_year):
+    # CHỐT CHẶN 1: Ép kiểu nếu vô tình nhận phải Series do cột trùng lặp
+    if isinstance(val, pd.Series): 
+        val = val.iloc[0]
+        
     if pd.isna(val): return pd.NaT, pd.NaT
     s = str(val).strip()
     if not s: return pd.NaT, pd.NaT
@@ -214,7 +216,6 @@ def load_and_preprocess_data(file_source_bytes, ref_dt_str):
     try: xls = pd.ExcelFile(io.BytesIO(file_source_bytes))
     except: return pd.DataFrame(), {}, {}
     
-    # ĐỌC GHI CHÚ (NOTE) TỰ ĐỘNG TỪ SHEET "MACHINE&ABILITY"
     if 'MACHINE&ABILITY' in xls.sheet_names:
         try:
             df_mach = pd.read_excel(xls, sheet_name='MACHINE&ABILITY', header=None)
@@ -231,14 +232,26 @@ def load_and_preprocess_data(file_source_bytes, ref_dt_str):
                         except IndexError:
                             pass 
                         dynamic_notes[m_name] = note_str
-        except Exception as e:
+        except Exception:
             pass 
             
-    # Đọc dữ liệu 3 xưởng
     for sname, h_idx, ws in configs:
         if sname in xls.sheet_names:
             df = pd.read_excel(xls, sheet_name=sname, header=h_idx)
             df.columns = [str(c).replace('\n', ' ').strip() for c in df.columns]
+            
+            # CHỐT CHẶN 2 (QUAN TRỌNG NHẤT): Loại bỏ cột trùng lặp để xử lý tận gốc lỗi Series Truth Value
+            new_cols = []
+            seen = {}
+            for c in df.columns:
+                if c not in seen:
+                    seen[c] = 1
+                    new_cols.append(c)
+                else:
+                    new_cols.append(f"{c}_dup{seen[c]}")
+                    seen[c] += 1
+            df.columns = new_cols
+            # -------------------------------------------------------------
             
             date_col = next((col for col in df.columns if 'start & end' in col.lower()), None)
             if date_col and 'Machine Name' in df.columns:
@@ -278,9 +291,15 @@ def load_and_preprocess_data(file_source_bytes, ref_dt_str):
     res['Còn (ngày)'] = (res['Hạn áp dụng'] - ref_dt_val).dt.days
     
     def classify_risk(row):
-        if str(row['Status']).strip().lower() in ['done', 'services']: return 'Đã xong / GC ngoài'
-        if pd.isna(row['Còn (ngày)']): return 'Thiếu hạn'
-        d = row['Còn (ngày)']
+        # CHỐT CHẶN 3: Xử lý an toàn khi DataFrame có nguy cơ sinh ra Series trong df.apply
+        status = row.get('Status', '')
+        if isinstance(status, pd.Series): status = status.iloc[0]
+        if str(status).strip().lower() in ['done', 'services']: return 'Đã xong / GC ngoài'
+        
+        d = row.get('Còn (ngày)')
+        if isinstance(d, pd.Series): d = d.iloc[0]
+        
+        if pd.isna(d): return 'Thiếu hạn'
         if d < 0: return 'Quá hạn'
         if d < 7: return '< 7 ngày'
         if d <= 14: return '7–14 ngày'
@@ -302,7 +321,6 @@ def load_and_preprocess_data(file_source_bytes, ref_dt_str):
 if raw_file_bytes is not None:
     df_raw, machine_free_dates, parsed_notes = load_and_preprocess_data(raw_file_bytes, str(ref_date))
     
-    # Tự động cập nhật Ghi chú vào Danh sách Máy gốc
     for m_code, text_note in parsed_notes.items():
         if m_code in MACHINE_DETAILS:
             MACHINE_DETAILS[m_code]["note"] = text_note
@@ -453,17 +471,135 @@ if not df_filtered.empty:
         else: st.info("Không có dữ liệu số lượng Qty hợp lệ.")
 else: st.info("Không có dữ liệu để vẽ biểu đồ Pareto.")
 
+# -------------------------------------------------------------
+# 8. BẢNG TỔNG HỢP RỦI RO THEO MÁY (MA TRẬN KHUNG VUÔNG & TÔ FULL MÀU Ô)
+# -------------------------------------------------------------
 st.markdown("---")
+st.markdown("##### 🔥 Heatmap cảnh báo theo máy")
+st.markdown("<p style='font-size:12.5px; opacity:0.8; margin-top:-5px;'>Theo dõi giám sát các máy có nguy cơ cao.</p>", unsafe_allow_html=True)
+
+heatmap_data = pd.DataFrame(index=FACTORY_MACHINES, columns=risk_order).fillna(0)
+
+if not df_filtered.empty:
+    grouped_risk = df_filtered.groupby(['Machine Name', 'Mức rủi ro']).size().reset_index(name='Số lượng')
+    for _, row in grouped_risk.iterrows():
+        m_name = row['Machine Name']
+        m_risk = row['Mức rủi ro']
+        if m_name in FACTORY_MACHINES and m_risk in risk_order:
+            heatmap_data.at[m_name, m_risk] = row['Số lượng']
+
+heatmap_data = heatmap_data.astype(int)
+
+risk_colors_hex = {
+    'Quá hạn': '#ef4444',      # Đỏ
+    '< 7 ngày': '#f97316',    # Cam
+    '7–14 ngày': '#eab308',   # Vàng sáng
+    '14–21 ngày': '#3b82f6',  # Xanh lam
+    'An toàn': '#22c55e',      # Xanh lục
+    'Thiếu hạn': '#94a3b8'     # Xám
+}
+
+# Xây dựng cấu trúc CSS đảm bảo khung tổng thể cân xứng hình vuông và các ô tô full màu
+heatmap_html = '''
+<style>
+.hm-square-wrapper {
+    display: flex;
+    justify-content: flex-start;
+    margin-bottom: 10px;
+}
+.hm-square-container {
+    width: 650px;
+    height: 650px;
+    max-width: 100%;
+    aspect-ratio: 1 / 1;
+    overflow: auto;
+    border: 2px solid rgba(128, 128, 128, 0.3);
+    border-radius: 8px;
+    background-color: var(--secondary-background-color);
+    padding: 5px;
+}
+.hm-square-table {
+    width: 100%;
+    height: 100%;
+    border-collapse: collapse;
+    text-align: center;
+    font-size: 13px;
+    font-family: sans-serif;
+    table-layout: fixed;
+}
+.hm-square-table th {
+    padding: 8px 4px;
+    font-weight: 700;
+    color: var(--text-color);
+    background-color: var(--background-color);
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    border: 1px solid rgba(128,128,128,0.3);
+    font-size: 12px;
+}
+.hm-square-table td {
+    border: 1px solid rgba(128, 128, 128, 0.2);
+    padding: 0;
+    height: 100%;
+}
+.hm-full-cell {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 13px;
+    min-height: 24px;
+}
+.hm-row-mach {
+    font-weight: bold;
+    text-align: center;
+    background-color: var(--background-color);
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    color: var(--text-color);
+    border: 1px solid rgba(128,128,128,0.3) !important;
+}
+</style>
+<div class="hm-square-wrapper">
+<div class="hm-square-container">
+<table class="hm-square-table">
+<thead>
+    <tr><th class="hm-row-mach" style="width: 15%;">Máy</th>
+'''
+for r in risk_order:
+    heatmap_html += f"<th>{r}</th>"
+heatmap_html += "</tr></thead><tbody>"
+
+for m in FACTORY_MACHINES:
+    heatmap_html += f"<tr><td class='hm-row-mach'>{m}</td>"
+    for r in risk_order:
+        val = heatmap_data.at[m, r]
+        tooltip = f"Máy {m} | {r}: {val} đơn"
+        
+        if val == 0:
+            heatmap_html += f"<td><div class='hm-full-cell' title='{tooltip}' style='color: rgba(128,128,128,0.4); background-color: transparent;'>0</div></td>"
+        else:
+            bg_color = risk_colors_hex[r]
+            font_color = "#111827" if r == '7–14 ngày' else "#ffffff"
+            heatmap_html += f"<td><div class='hm-full-cell' title='{tooltip}' style='background-color: {bg_color}; color: {font_color};'>{val}</div></td>"
+    heatmap_html += "</tr>"
+heatmap_html += "</tbody></table></div></div>"
+
+st.markdown(heatmap_html, unsafe_allow_html=True)
 
 # -------------------------------------------------------------
-# 8. BIỂU ĐỒ GANTT LỊCH TRÌNH CHẠY MÁY NỐI TIẾP
+# 9. BIỂU ĐỒ GANTT LỊCH TRÌNH CHẠY MÁY NỐI TIẾP
 # -------------------------------------------------------------
+st.markdown("---")
 st.markdown("##### 📅 Lịch trình chạy máy liên tục (Gantt Chart)")
 
 if 'Start' in df_filtered.columns and not df_filtered.empty:
     df_gantt = df_filtered[df_filtered['Machine Name'].isin(FACTORY_MACHINES)].dropna(subset=['Start', 'End']).copy()
     
-    # --- BỔ SUNG TỰ ĐỘNG CHÈN MÁY TRỐNG LÊN GANTT CHART ---
     existing_machines = df_gantt['Machine Name'].unique()
     missing_machines = [m for m in FACTORY_MACHINES if m not in existing_machines]
     
@@ -473,16 +609,15 @@ if 'Start' in df_filtered.columns and not df_filtered.empty:
             dummy_records.append({
                 'Machine Name': m,
                 'Start': pd.to_datetime(ref_date),
-                'End': pd.to_datetime(ref_date) + pd.Timedelta(minutes=1), # Tạo 1 vạch siêu mỏng
-                'Mức rủi ro': 'Thiếu hạn', # Dùng màu xám nhạt (Idle)
+                'End': pd.to_datetime(ref_date) + pd.Timedelta(minutes=1), 
+                'Mức rủi ro': 'Thiếu hạn', 
                 'Job Order': 'Chưa xếp lịch',
                 'Customer': '—',
                 'Status': '—',
                 'Qty': 0,
-                'Mã rút gọn': ' ' # Không hiển thị chữ lên vạch
+                'Mã rút gọn': ' ' 
             })
         df_gantt = pd.concat([df_gantt, pd.DataFrame(dummy_records)], ignore_index=True)
-    # --------------------------------------------------------
 
     if not df_gantt.empty:
         df_gantt['Machine Name'] = pd.Categorical(df_gantt['Machine Name'], categories=FACTORY_MACHINES, ordered=True)
@@ -505,39 +640,30 @@ else: st.error("❌ Không tìm thấy cột chứa dữ liệu ngày tháng tro
 st.markdown("---")
 
 # -------------------------------------------------------------
-# 9. KHỐI: THẺ TRẠNG THÁI MÁY CHI TIẾT (BỎ TRẠNG THÁI RUNNING)
+# 10. KHỐI: THẺ TRẠNG THÁI MÁY CHI TIẾT
 # -------------------------------------------------------------
 st.markdown("##### ⚙ Trạng thái Máy & Dự kiến rảnh máy *(Load dữ liệu từ cột Start & End Date)*")
 
-# Lấy giờ hệ thống theo múi giờ Việt Nam
 current_time_vn = datetime.now(ZoneInfo("Asia/Ho_Chi_Minh")).replace(tzinfo=None)
 
 m_cols = st.columns(4)
 for idx, m_code in enumerate(FACTORY_MACHINES):
     col = m_cols[idx % 4]
     
-    # Lấy toàn bộ lệnh chưa Done của máy này
     mach_orders = df_open[df_open['Machine Name'] == m_code].copy()
-    
-    # Vẫn đếm số lượng Waiting để điền vào "Đợi: X lệnh"
     m_wait = mach_orders[mach_orders['Status'].astype(str).str.strip().str.lower() == 'waiting']
-    
     crit_count = len(mach_orders[mach_orders['Mức rủi ro'].isin(['Quá hạn', '< 7 ngày'])])
     m_info = MACHINE_DETAILS.get(m_code, {"a": "—", "b": "—", "note": ""})
     
-    # --- LOGIC TÌM MÃ HÀNG ĐANG CHẠY DỰA THEO THỜI GIAN THỰC ---
     curr_row = None
     if not mach_orders.empty: 
         if 'Real_Start' in mach_orders.columns:
             valid_runs = mach_orders.dropna(subset=['Real_Start'])
             if not valid_runs.empty:
-                # Tìm các mã có giờ Start <= Giờ hiện tại
                 started_runs = valid_runs[valid_runs['Real_Start'] <= current_time_vn]
                 if not started_runs.empty:
-                    # Lấy mã sát với giờ hiện tại nhất (mã dòng cuối cùng sau khi sort theo Start)
                     curr_row = started_runs.sort_values(by='Real_Start').iloc[-1]
                 else:
-                    # Nếu tất cả các mã đều là ca tương lai (Start > Giờ hiện tại), lấy mã đầu tiên
                     curr_row = valid_runs.sort_values(by='Real_Start').iloc[0]
             else:
                 curr_row = mach_orders.iloc[0]
@@ -549,10 +675,13 @@ for idx, m_code in enumerate(FACTORY_MACHINES):
     else: 
         mql_name = "(Chưa có lệnh)"
         sub_info = "Máy đang trống"
-    # -------------------------------------------------------------
     
     free_date_text = "Chưa xếp lịch"
     raw_val = machine_free_dates.get(m_code, None)
+    
+    if isinstance(raw_val, pd.Series): 
+        raw_val = raw_val.iloc[0]
+        
     if raw_val is not None and str(raw_val).strip() != '':
         if isinstance(raw_val, (datetime, date, pd.Timestamp)): free_date_text = raw_val.strftime('%d/%m')
         else:
@@ -586,7 +715,7 @@ for idx, m_code in enumerate(FACTORY_MACHINES):
 st.markdown("---")
 
 # -------------------------------------------------------------
-# 10. BẢNG DANH SÁCH CHI TIẾT
+# 11. BẢNG DANH SÁCH CHI TIẾT
 # -------------------------------------------------------------
 st.markdown(f"##### Danh sách đơn có nguy cơ delay ({n_open} đơn chưa hoàn thành)")
 
