@@ -484,7 +484,7 @@ if TV_MODE:
     st.markdown('''<style>
     [data-testid="stSidebar"],[data-testid="stHeader"],footer{display:none!important}
     .block-container,.stMainBlockContainer{padding:0!important;max-width:100%!important}
-    [data-testid="stButton"]{position:fixed!important;right:12px;bottom:8px;z-index:10000;width:auto!important}
+    [data-testid="stButton"]{position:fixed!important;right:20px;bottom:90px;z-index:10000;width:auto!important}
     [data-testid="stButton"] button{min-height:38px;font-size:20px;background:#f4f5f7;color:#3b82f6;border:1px solid #ccd0d6}
     iframe[title="st.iframe"]{height:100vh!important;width:100%!important;border:0}
     </style>''',unsafe_allow_html=True)
