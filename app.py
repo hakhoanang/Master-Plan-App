@@ -448,7 +448,7 @@ def tv_document(snapshot, error=''):
     .machine header{display:flex;justify-content:space-between;border-bottom:1px solid #ddd;padding-bottom:14px;margin-bottom:14px}
     .machine header b{font-size:38px}.machine small{font-size:23px}.mql{font-size:32px;font-weight:bold;overflow-wrap:anywhere;margin:8px 0}
     .machine footer{border-top:1px dashed #ccc;margin-top:18px;padding-top:14px}.machine em{color:#f59e0b;font-size:25px}
-    #controls{position:fixed;bottom:0;left:0;right:0;height:54px;background:#f4f5f7;display:flex;align-items:center;gap:12px;padding:8px 20px;font-size:20px}
+    #controls{position:fixed;bottom:0;left:0;right:0;height:54px;background:#f4f5f7;display:flex;align-items:center;gap:12px;padding:8px 150px 8px 20px;font-size:20px}
     button{font-size:20px;padding:5px 12px;cursor:pointer}#stamp{flex:1}a{color:#3b82f6}
     '''
     js='''
@@ -475,7 +475,7 @@ def tv_document(snapshot, error=''):
     window.addEventListener('resize',()=>{const el=slides[index].querySelector('.chart');if(el&&el.dataset.ready)Plotly.Plots.resize(el)});
     show();reset();
     '''.replace('SECONDS',str(TV_SECONDS))
-    return '<!doctype html><html><head><meta charset="utf-8"><style>'+css+'</style><script>'+get_plotlyjs()+'</script></head><body>'+''.join(slides)+'<div id="controls"><span id="stamp">'+html.escape(status)+'</span><span id="night"></span><button id="prev">◀</button><button id="pause"></button><button id="next">▶</button><span id="page"></span><a href="?tv=0" target="_top">Máy tính</a></div><script>'+js+'</script></body></html>'
+    return '<!doctype html><html><head><meta charset="utf-8"><style>'+css+'</style><script>'+get_plotlyjs()+'</script></head><body>'+''.join(slides)+'<div id="controls"><span id="stamp">'+html.escape(status)+'</span><span id="night"></span><button id="prev">◀</button><button id="pause"></button><button id="next">▶</button><span id="page"></span></div><script>'+js+'</script></body></html>'
 
 TV_MODE = st.query_params.get('tv','0') == '1'
 if TV_MODE:
@@ -484,6 +484,8 @@ if TV_MODE:
     st.markdown('''<style>
     [data-testid="stSidebar"],[data-testid="stHeader"],footer{display:none!important}
     .block-container,.stMainBlockContainer{padding:0!important;max-width:100%!important}
+    [data-testid="stButton"]{position:fixed!important;right:12px;bottom:8px;z-index:10000;width:auto!important}
+    [data-testid="stButton"] button{min-height:38px;font-size:20px;background:#f4f5f7;color:#3b82f6;border:1px solid #ccd0d6}
     iframe[title="st.iframe"]{height:100vh!important;width:100%!important;border:0}
     </style>''',unsafe_allow_html=True)
     now=datetime.now(VN)
@@ -518,6 +520,10 @@ if TV_MODE:
         st.error('Chưa tải được dữ liệu: '+st.session_state.get('tv_error',''))
         st.info('Ứng dụng tự thử lại sau 5 phút. Có thể quay lại chế độ máy tính để kiểm tra nguồn.')
         st.link_button('Về chế độ máy tính','?tv=0')
+    # Nút native nằm ngoài iframe: đổi chế độ qua Streamlit, không dùng điều hướng iframe.
+    if st.button('Máy tính', key='tv_exit_desktop'):
+        st.query_params['tv'] = '0'
+        st.rerun()
     st.stop()
 
 if st.sidebar.button('📺 Mở chế độ TV Full HD',type='primary'):
