@@ -595,7 +595,6 @@ st.markdown(heatmap_html, unsafe_allow_html=True)
 # 9. BIỂU ĐỒ GANTT LỊCH TRÌNH CHẠY MÁY NỐI TIẾP
 # -------------------------------------------------------------
 st.markdown("---")
-st.markdown("##### 📅 Lịch trình chạy máy liên tục (Gantt Chart)")
 
 if 'Start' in df_filtered.columns and not df_filtered.empty:
     df_gantt = df_filtered[df_filtered['Machine Name'].isin(FACTORY_MACHINES)].dropna(subset=['Start', 'End']).copy()
@@ -631,10 +630,24 @@ if 'Start' in df_filtered.columns and not df_filtered.empty:
         
         fig_gantt.update_yaxes(autorange="reversed", categoryorder="array", categoryarray=FACTORY_MACHINES, title="", tickfont=dict(size=14, weight="bold"))
         fig_gantt.update_xaxes(title="Trục thời gian")
-        fig_gantt.update_layout(height=max(450, len(FACTORY_MACHINES) * 38), margin=dict(l=10, r=10, t=30, b=10), showlegend=True, legend_title_text='Mức rủi ro')
+        
+        # Thêm tiêu đề vào trực tiếp trong khung biểu đồ Plotly để hiển thị khi Fullscreen
+        fig_gantt.update_layout(
+            title=dict(
+                text="📅 Lịch trình chạy máy ",
+                font=dict(size=18, weight="bold"),
+                x=0.0,
+                y=0.98
+            ),
+            height=max(450, len(FACTORY_MACHINES) * 38), 
+            margin=dict(l=10, r=10, t=50, b=10), 
+            showlegend=True, 
+            legend_title_text='Mức rủi ro'
+        )
+        
         fig_gantt.update_traces(textfont=dict(size=14, color='white', weight='bold'), textposition='inside', insidetextanchor='middle')
         st.plotly_chart(fig_gantt, use_container_width=True)
-    else: st.info("⚠️ Không có dữ liệu lịch chạy hợp lệ để vẽ biểu đồ.")
+    else: st.info("⚠️️ Không có dữ liệu lịch chạy hợp lệ để vẽ biểu đồ.")
 else: st.error("❌ Không tìm thấy cột chứa dữ liệu ngày tháng trong file Excel của bạn.")
 
 st.markdown("---")
