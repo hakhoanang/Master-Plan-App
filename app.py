@@ -46,22 +46,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -------------------------------------------------------------
-# 1.5 HEADER VÀ Ô CHỌN NGÀY THAM CHIẾU
-# -------------------------------------------------------------
-h_col1, h_col2 = st.columns([4, 1])
-with h_col1:
-    st.markdown("""<div class="header-box">
-<h2>Master Plan SG — Cảnh báo Delay & Theo dõi MQL</h2>
-<p>Ưu tiên xem theo Khách hàng / MQL · Bỏ qua các đơn có cột H = Done / Services</p>
-</div>""", unsafe_allow_html=True)
-with h_col2:
-    st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
-    ref_date = st.date_input("Ngày tham chiếu phân tích",
-    datetime.now(ZoneInfo("Asia/Ho_Chi_Minh")).date())
 
-# -------------------------------------------------------------
-# 2. TỐI ƯU HÓA: AUTO-FIX LINK CHỐNG LỖI 404 & CHỐNG CHẶN BOT
-# -------------------------------------------------------------
 @st.cache_data(show_spinner=False, ttl=600) 
 def fetch_excel_from_url(gsheet_url_param):
     try:
@@ -87,11 +72,11 @@ def fetch_excel_from_url(gsheet_url_param):
         }
         
         session = requests.Session()
-        response = session.get(download_url, headers=headers, stream=True, allow_redirects=True)
+        response = session.get(download_url, headers=headers, stream=True, allow_redirects=True, timeout=(10, 30))
         
         token = next((v for k, v in response.cookies.items() if k.startswith('download_warning')), None)
         if token:
-            response = session.get(download_url + f"&confirm={token}", headers=headers, stream=True, allow_redirects=True)
+            response = session.get(download_url + f"&confirm={token}", headers=headers, stream=True, allow_redirects=True, timeout=(10, 30))
             
         if response.status_code == 200:
             content_type = response.headers.get("Content-Type", "")
@@ -106,45 +91,6 @@ def fetch_excel_from_url(gsheet_url_param):
             
     except Exception as e:
         return None, f"Lỗi mạng: {e}"
-
-st.sidebar.header("📁 Cập nhật kế hoạch")
-
-if "saved_link" not in st.session_state:
-    st.session_state["saved_link"] = ""
-
-if st.sidebar.button("🔄 Làm mới dữ liệu (Tải lại từ đầu)", type="primary"):
-    st.cache_data.clear()
-
-data_source = st.sidebar.radio(
-    "Chọn phương thức tải dữ liệu:", 
-    ("Dùng Link Google Sheets/Drive", "Tải file Excel từ máy")
-)
-
-raw_file_bytes = None
-
-if data_source == "Tải file Excel từ máy":
-    uploaded_file = st.sidebar.file_uploader("Tải file Excel", type=["xlsx", "xls"])
-    if uploaded_file:
-        raw_file_bytes = uploaded_file.getvalue()
-else:
-    st.sidebar.info("💡 Bạn có thể dán Link Công bố (Publish) hoặc Link Chia sẻ (Share) đều được. Hệ thống sẽ tự động xử lý.")
-    gsheet_url = st.sidebar.text_input("Dán Link vào đây:", key="saved_link")
-    
-    if not gsheet_url and not st.session_state.get('user_changed_link', False):
-        gsheet_url = ("https://docs.google.com/spreadsheets/d/e/"
-                      "2PACX-1vTQOMzsXaj_Ed_ooA9x8LJ8NTkikDIBYVGs87h-ajD9FYjWHktL-MrzVcGqxFqRcFaNkTHzcH-xLARR/"
-                      "pub?output=xlsx")
-                      
-    st.sidebar.caption("Nguồn dữ liệu mặc định: Master Plan SG")
-    
-    if gsheet_url:
-        with st.sidebar.status("Đang tải dữ liệu...", expanded=False) as status:
-            content, err = fetch_excel_from_url(gsheet_url)
-            if err:
-                status.update(label=err, state="error")
-            else:
-                raw_file_bytes = content
-                status.update(label="Dữ liệu đã sẵn sàng!", state="complete")
 
 FACTORY_MACHINES = [
     "MB1", "MA2", "MB3", "MA6", "MB6", "MA7", "MB7", 
@@ -168,9 +114,6 @@ MACHINE_DETAILS = {
     "GD2": {"a": "HỮU", "b": "—", "note": ""}, "WC": {"a": "—", "b": "—", "note": ""}
 }
 
-# -------------------------------------------------------------
-# 3. HÀM ĐỌC DỮ LIỆU & LẤY NGÀY NỐI ĐUÔI
-# -------------------------------------------------------------
 def parse_gantt_dates(val, ref_year):
     # CHỐT CHẶN 1: Ép kiểu nếu vô tình nhận phải Series do cột trùng lặp
     if isinstance(val, pd.Series): 
@@ -317,6 +260,333 @@ def load_and_preprocess_data(file_source_bytes, ref_dt_str):
         res['Mã rút gọn'] = res['Job Order'].astype(str).str[:3].str.upper()
 
     return res, free_dates, dynamic_notes
+
+# =============================================================
+# TV FULL HD — thêm ?tv=1 vào địa chỉ ứng dụng để trình chiếu.
+# Dependencies: streamlit>=1.37, pandas, plotly>=5.24,
+#               requests, openpyxl, xlrd, tzdata
+# =============================================================
+import html
+import json
+import math
+import time as clock
+from datetime import timedelta
+import streamlit.components.v1 as components
+from plotly.offline import get_plotlyjs
+
+TV_URL = ('https://docs.google.com/spreadsheets/d/e/'
+          '2PACX-1vTQOMzsXaj_Ed_ooA9x8LJ8NTkikDIBYVGs87h-ajD9FYjWHktL-MrzVcGqxFqRcFaNkTHzcH-xLARR/'
+          'pub?output=xlsx')
+TV_SECONDS = 25
+VN = ZoneInfo('Asia/Ho_Chi_Minh')
+TV_COLORS = {'Quá hạn':'#ef4444','< 7 ngày':'#f97316',
+             '7–14 ngày':'#eab308','14–21 ngày':'#3b82f6',
+             'An toàn':'#22c55e','Thiếu hạn':'#94a3b8'}
+
+def tv_daytime(now):
+    return 450 <= now.hour * 60 + now.minute < 1170
+
+def tv_slot(now):
+    return now.replace(minute=(now.minute // 30)*30, second=0, microsecond=0)
+
+def tv_should_fetch(now, last_slot, retry_at):
+    return tv_daytime(now) and (last_slot is None or tv_slot(now) > last_slot) and now >= retry_at
+
+def tv_text(value):
+    if value is None or (not isinstance(value, (list, dict)) and pd.isna(value)):
+        return '—'
+    return html.escape(str(value))
+
+def tv_snapshot(url):
+    # Gọi bản gốc, bỏ cache 10 phút để nhận dữ liệu mới đúng lịch TV.
+    data, error = fetch_excel_from_url.__wrapped__(url)
+    if error:
+        raise ValueError(error)
+    now = datetime.now(VN)
+    frame, free, notes = load_and_preprocess_data(data, str(now.date()))
+    if frame.empty:
+        raise ValueError('File rỗng hoặc không đọc được các sheet kế hoạch.')
+    return dict(df=frame, free=free, notes=notes, updated=now, ref=now.date())
+
+def tv_document(snapshot, error=''):
+    df = snapshot['df']
+    df = df[~df['Status'].str.lower().isin(['done','services'])].copy()
+    risks = list(TV_COLORS)
+    slides = []
+    def add(title, body):
+        slides.append('<section class="slide"><h1>'+html.escape(title)+'</h1><div class="body">'+body+'</div></section>')
+    def chart(title, fig):
+        fig.update_layout(autosize=True, height=None, width=None,
+            font=dict(size=28), title=None,
+            margin=dict(l=100,r=110,t=30,b=100),
+            showlegend=False,
+            paper_bgcolor='white',plot_bgcolor='white')
+        fig.update_xaxes(automargin=True)
+        fig.update_yaxes(automargin=True)
+        # Chú giải nằm ngoài vùng vẽ, không đè nhãn trục hoặc bị cắt mép.
+        legends = []
+        seen = set()
+        for trace in fig.data:
+            if trace.type == 'pie':
+                entries = [(label, TV_COLORS.get(label, '#94a3b8')) for label in trace.labels]
+            else:
+                color = TV_COLORS.get(trace.name)
+                if color is None:
+                    color = trace.line.color if trace.type == 'scatter' else trace.marker.color
+                entries = [(trace.name, color or '#3b82f6')]
+            for label, color in entries:
+                if not label or label in seen:
+                    continue
+                seen.add(label)
+                legends.append('<span><i style="background:'+html.escape(str(color))+'"></i>'+html.escape(str(label))+'</span>')
+        legend_html = '<div class="chart-legend">'+''.join(legends)+'</div>'
+        payload=fig.to_json().replace('</','<\\/')
+        add(title,legend_html+'<div class="chart"></div><script type="application/json" class="figure">'+payload+'</script>')
+
+    counts=df['Mức rủi ro'].value_counts()
+    cards=[]
+    labels=['Quá hạn','< 7 ngày','7–14 ngày','14–21 ngày','An toàn','Tổng tồn']
+    for label in labels:
+        color=('#000000' if label=='Tổng tồn' else '#facc15' if label=='7–14 ngày' else TV_COLORS[label])
+        value=len(df) if label=='Tổng tồn' else int(counts.get(label,0))
+        sub={'Quá hạn':'Cần xử lý','< 7 ngày':'Cần xử lý hôm nay','7–14 ngày':'Theo dõi sát tiến độ',
+             '14–21 ngày':'Không chủ quan','An toàn':'> 21 ngày','Tổng tồn':'Chưa hoàn thành'}[label]
+        cards.append(f'<div class="kpi" style="background:{color};color:{"#111827" if label=="7–14 ngày" else "white"}"><div>{html.escape(label)}</div><strong>{value}</strong><small>{sub}</small></div>')
+    add('TỔNG QUAN CHỈ SỐ RỦI RO','<div class="grid">'+''.join(cards)+'</div>')
+    if not df.empty:
+        top=df['Customer'].value_counts().head(12).index
+        grouped=df[df.Customer.isin(top)].groupby(['Customer','Mức rủi ro']).size().reset_index(name='Số đơn')
+        fig=px.bar(grouped,x='Customer',y='Số đơn',color='Mức rủi ro',text='Số đơn',
+            color_discrete_map=TV_COLORS,category_orders={'Mức rủi ro':risks})
+        fig.update_layout(barmode='stack',xaxis=dict(categoryorder='total descending'))
+        fig.update_traces(textposition='inside',textfont_size=28)
+        chart('Phân bổ đơn hàng theo Khách hàng & Mức rủi ro',fig)
+        rc=counts.rename_axis('Mức rủi ro').reset_index(name='Số lượng')
+        fig=px.pie(rc,values='Số lượng',names='Mức rủi ro',color='Mức rủi ro',hole=.55,
+            color_discrete_map=TV_COLORS,category_orders={'Mức rủi ro':risks})
+        fig.update_traces(sort=False,textinfo='percent+value',textfont_size=32)
+        chart('Tỷ lệ phân bổ rủi ro tổng thể',fig)
+        qty=pd.to_numeric(df['Qty'],errors='coerce').fillna(0)
+        for title,series,color in [
+            ('Pareto — Số đơn hàng (MQL) theo khách hàng',df.groupby('Customer').size(),'#3b82f6'),
+            ('Pareto — Khối lượng chi tiết (Qty) theo khách hàng',df.assign(Qty_num=qty).groupby('Customer').Qty_num.sum(),'#10b981')]:
+            series=series[series>0].sort_values(ascending=False)
+            if series.empty: continue
+            fig=go.Figure([go.Bar(x=series.index,y=series.values,name='Số đơn' if 'MQL' in title else 'Tổng Qty',marker_color=color),
+                go.Scatter(x=series.index,y=series.cumsum()/series.sum()*100,name='Lũy kế %',yaxis='y2',
+                mode='lines+markers',line=dict(color='#ef4444',width=3))])
+            fig.update_layout(yaxis2=dict(title='Lũy kế (%)',overlaying='y',side='right',range=[0,115]))
+            chart(title,fig)
+
+    machines=FACTORY_MACHINES
+    rows='<tr><th>Máy</th>'+''.join('<th>'+html.escape(r)+'</th>' for r in risks)+'</tr>'
+    for machine in machines:
+        values=df[df['Machine Name']==machine]['Mức rủi ro'].value_counts()
+        rows+='<tr><th>'+machine+'</th>'
+        for risk in risks:
+            value=int(values.get(risk,0)); color=TV_COLORS[risk] if value else '#f4f5f7'
+            fg='#111827' if risk=='7–14 ngày' else 'white'
+            rows+=f'<td style="background:{color};color:{fg if value else "#999"}">{value}</td>'
+        rows+='</tr>'
+    add('Heatmap cảnh báo theo máy — Toàn bộ 24 máy','<table class="heat">'+rows+'</table>')
+    if {'Start','End'}.issubset(df.columns):
+        gantt=df[df['Machine Name'].isin(machines)].dropna(subset=['Start','End']).copy()
+        for machine in machines:
+            if machine not in set(gantt['Machine Name']):
+                gantt=pd.concat([gantt,pd.DataFrame([{'Machine Name':machine,'Start':pd.Timestamp(snapshot['ref']),
+                  'End':pd.Timestamp(snapshot['ref'])+pd.Timedelta(minutes=1),'Mức rủi ro':'Thiếu hạn',
+                  'Mã rút gọn':' ','Job Order':'Chưa xếp lịch'}])],ignore_index=True)
+        fig=px.timeline(gantt,x_start='Start',x_end='End',y='Machine Name',color='Mức rủi ro',
+            text='Mã rút gọn',hover_name='Job Order',color_discrete_map=TV_COLORS,
+            category_orders={'Machine Name':machines,'Mức rủi ro':risks})
+        fig.update_yaxes(autorange='reversed',title='',categoryorder='array',
+            categoryarray=machines,tickmode='array',tickvals=machines,tickfont=dict(size=23))
+        fig.update_traces(textfont=dict(size=20,color='white'),textposition='inside')
+        chart('Lịch trình chạy máy — Toàn bộ 24 máy',fig)
+
+    for start in range(0,len(FACTORY_MACHINES),6):
+        cards=[]
+        for machine in FACTORY_MACHINES[start:start+6]:
+            orders=df[df['Machine Name']==machine]
+            crit=int(orders['Mức rủi ro'].isin(['Quá hạn','< 7 ngày']).sum())
+            waiting=int(orders.Status.str.lower().eq('waiting').sum())
+            note=snapshot['notes'].get(machine,'')
+            edge='#ef4444' if crit else '#94a3b8' if orders.empty else '#f97316' if note else '#22c55e'
+            badge=f'{crit} rủi ro' if crit else 'Rảnh máy' if orders.empty else 'Lưu ý' if note else 'OK'
+            mql='(Chưa có lệnh)'; details='Máy đang trống'
+            if not orders.empty:
+                valid=orders.dropna(subset=['Real_Start']) if 'Real_Start' in orders else orders.iloc[:0]
+                began=valid[valid.Real_Start<=snapshot['updated'].replace(tzinfo=None)] if not valid.empty else valid
+                row=(began.sort_values('Real_Start').iloc[-1] if not began.empty else
+                     valid.sort_values('Real_Start').iloc[0] if not valid.empty else orders.iloc[0])
+                mql=tv_text(row['Job Order']); details='BV: '+tv_text(row.get('Drawing No.'))+' · SL: '+tv_text(row.get('Qty'))
+            free=snapshot['free'].get(machine,'Chưa xếp lịch')
+            if isinstance(free,(date,datetime,pd.Timestamp)): free=free.strftime('%d/%m')
+            elif '-' in str(free):
+                if re.match(r'^\d{4}-\d{2}-\d{2}',str(free)):
+                    free=pd.to_datetime(str(free)[:10]).strftime('%d/%m')
+                else: free=str(free).split('-')[-1].strip()
+            cards.append(f'<div class="machine" style="border-left:8px solid {edge}"><header><b>{machine}</b><span style="color:{edge}">{badge}</span></header><small>Đang chạy:</small><div class="mql">{mql}</div><div>{details}</div><footer>Đợi: <b>{waiting}</b> lệnh · <span style="color:#3b82f6">Rảnh: {tv_text(free)}</span></footer><em>{tv_text(note) if note else ""}</em></div>')
+        add(f'Trạng thái Máy & Dự kiến rảnh máy — Nhóm {start//6+1}','<div class="grid">'+''.join(cards)+'</div>')
+
+    # Khối #11 chỉ giữ trong chế độ máy tính.
+    updated=snapshot['updated'].strftime('%d/%m/%Y %H:%M')
+    status='Cập nhật thành công: '+updated+' · Ngày phân tích: '+snapshot['ref'].strftime('%d/%m/%Y')
+    if error: status+=' · Chưa tải được bản mới; đang giữ dữ liệu cũ.'
+    css='''
+    *{box-sizing:border-box}body{margin:0;font-family:Arial,sans-serif;color:#111827;background:white;overflow:hidden}
+    .slide{display:none;height:100vh;padding:16px 24px 72px}.slide.active{display:flex;flex-direction:column}
+    h1{font-size:38px;margin:0 0 18px;flex:none}.body{flex:1;min-height:0;display:flex;flex-direction:column}.chart{width:100%;flex:1;min-height:0}
+    .chart-legend{display:flex;flex-wrap:wrap;justify-content:center;gap:12px 28px;font-size:24px;padding:4px 8px 16px;flex:none}.chart-legend span{display:inline-flex;align-items:center;gap:8px;white-space:nowrap}.chart-legend i{width:20px;height:20px;display:inline-block;border-radius:3px}
+    .grid{height:100%;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr));gap:22px}
+    .kpi{border-radius:12px;padding:28px;font-size:36px;display:flex;flex-direction:column;justify-content:center}
+    .kpi strong{font-size:96px;margin:12px 0}.kpi small{font-size:28px}
+    table{width:100%;height:100%;border-collapse:collapse;table-layout:fixed}th,td{border:1px solid #ccd0d6;padding:7px;text-align:center}
+    th{background:#f4f5f7;font-size:26px}.heat{flex:1;min-height:0}.heat th,.heat td{padding:1px 5px;font-size:24px;line-height:1.05}.heat td{font-weight:bold}.heat tr{height:4%}
+    .detail td{font-size:24px;overflow-wrap:anywhere}.detail th{font-size:24px}.detail th:nth-child(4){width:16%}.detail th:nth-child(9){width:14%}
+    .machine{border:1px solid #ddd;border-radius:10px;padding:22px;font-size:28px;overflow:auto}
+    .machine header{display:flex;justify-content:space-between;border-bottom:1px solid #ddd;padding-bottom:14px;margin-bottom:14px}
+    .machine header b{font-size:38px}.machine small{font-size:23px}.mql{font-size:32px;font-weight:bold;overflow-wrap:anywhere;margin:8px 0}
+    .machine footer{border-top:1px dashed #ccc;margin-top:18px;padding-top:14px}.machine em{color:#f59e0b;font-size:25px}
+    #controls{position:fixed;bottom:0;left:0;right:0;height:54px;background:#f4f5f7;display:flex;align-items:center;gap:12px;padding:8px 20px;font-size:20px}
+    button{font-size:20px;padding:5px 12px;cursor:pointer}#stamp{flex:1}a{color:#3b82f6}
+    '''
+    js='''
+    const slides=Array.from(document.querySelectorAll('.slide'));
+    let index=Number(sessionStorage.getItem('sg-tv-page')||0)%slides.length;
+    let paused=sessionStorage.getItem('sg-tv-paused')==='1';
+    function show(){
+      slides.forEach((s,i)=>s.classList.toggle('active',i===index));
+      sessionStorage.setItem('sg-tv-page',String(index));
+      const slide=slides[index], el=slide.querySelector('.chart');
+      if(el){if(!el.dataset.ready){const p=JSON.parse(slide.querySelector('.figure').textContent);Plotly.newPlot(el,p.data,p.layout,{responsive:true,displayModeBar:false});el.dataset.ready='1';}else{Plotly.Plots.resize(el);}}
+      document.getElementById('page').textContent=(index+1)+' / '+slides.length;
+      document.getElementById('pause').textContent=paused?'▶ Tiếp tục':'Ⅱ Tạm dừng';
+      const parts=new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Ho_Chi_Minh',hour:'2-digit',minute:'2-digit',hour12:false}).format(new Date()).split(':');
+      const mins=Number(parts[0])*60+Number(parts[1]);
+      document.getElementById('night').textContent=mins>=450&&mins<1170?'Tự cập nhật 30 phút':'Tạm dừng cập nhật ban đêm';
+    }
+    function move(n){index=(index+n+slides.length)%slides.length;show();}
+    let timer;function reset(){clearInterval(timer);timer=setInterval(()=>{if(!paused)move(1)},SECONDS*1000);}
+    document.getElementById('prev').onclick=()=>{move(-1);reset()};
+    document.getElementById('next').onclick=()=>{move(1);reset()};
+    document.getElementById('pause').onclick=()=>{paused=!paused;sessionStorage.setItem('sg-tv-paused',paused?'1':'0');show();reset()};
+    document.addEventListener('keydown',e=>{if(e.key==='ArrowRight')move(1);if(e.key==='ArrowLeft')move(-1);if(e.code==='Space'){e.preventDefault();document.getElementById('pause').click();}});
+    window.addEventListener('resize',()=>{const el=slides[index].querySelector('.chart');if(el&&el.dataset.ready)Plotly.Plots.resize(el)});
+    show();reset();
+    '''.replace('SECONDS',str(TV_SECONDS))
+    return '<!doctype html><html><head><meta charset="utf-8"><style>'+css+'</style><script>'+get_plotlyjs()+'</script></head><body>'+''.join(slides)+'<div id="controls"><span id="stamp">'+html.escape(status)+'</span><span id="night"></span><button id="prev">◀</button><button id="pause"></button><button id="next">▶</button><span id="page"></span><a href="?tv=0" target="_top">Máy tính</a></div><script>'+js+'</script></body></html>'
+
+TV_MODE = st.query_params.get('tv','0') == '1'
+if TV_MODE:
+    if not hasattr(st,'fragment'):
+        st.error('Cần Streamlit >= 1.37. Hãy cập nhật requirements.txt.'); st.stop()
+    st.markdown('''<style>
+    [data-testid="stSidebar"],[data-testid="stHeader"],footer{display:none!important}
+    .block-container,.stMainBlockContainer{padding:0!important;max-width:100%!important}
+    iframe[title="st.iframe"]{height:100vh!important;width:100%!important;border:0}
+    </style>''',unsafe_allow_html=True)
+    now=datetime.now(VN)
+    if 'tv_retry_at' not in st.session_state: st.session_state.tv_retry_at=now
+    # Nguồn URL có thể được chọn ở giao diện máy tính trước khi mở TV.
+    source=st.session_state.get('saved_link') or TV_URL
+    if st.session_state.get('tv_source')!=source:
+        for key in ['tv_snapshot','tv_slot','tv_error']: st.session_state.pop(key,None)
+        st.session_state.tv_source=source
+        st.session_state.tv_retry_at=now
+    initial='tv_snapshot' not in st.session_state
+    due=tv_should_fetch(now,st.session_state.get('tv_slot'),st.session_state.tv_retry_at)
+    if (initial and now>=st.session_state.tv_retry_at) or due:
+        try:
+            fresh=tv_snapshot(source)
+            st.session_state.tv_snapshot=fresh
+            st.session_state.tv_slot=tv_slot(now)
+            st.session_state.tv_error=''
+        except Exception as exc:
+            st.session_state.tv_error=str(exc)
+            st.session_state.tv_retry_at=now+timedelta(minutes=5)
+    @st.fragment(run_every=30)
+    def tv_tick():
+        current=datetime.now(VN)
+        missing='tv_snapshot' not in st.session_state
+        if (missing and current>=st.session_state.tv_retry_at) or tv_should_fetch(current,st.session_state.get('tv_slot'),st.session_state.tv_retry_at):
+            st.rerun()
+    tv_tick()
+    if 'tv_snapshot' in st.session_state:
+        components.html(tv_document(st.session_state.tv_snapshot,st.session_state.get('tv_error','')),height=1000,scrolling=False)
+    else:
+        st.error('Chưa tải được dữ liệu: '+st.session_state.get('tv_error',''))
+        st.info('Ứng dụng tự thử lại sau 5 phút. Có thể quay lại chế độ máy tính để kiểm tra nguồn.')
+        st.link_button('Về chế độ máy tính','?tv=0')
+    st.stop()
+
+if st.sidebar.button('📺 Mở chế độ TV Full HD',type='primary'):
+    st.query_params['tv']='1'
+    st.rerun()
+st.sidebar.caption('TV: tự chuyển 25 giây; tải mới 07:30–19:00 mỗi 30 phút. F11 để toàn màn hình.')
+
+# 1.5 HEADER VÀ Ô CHỌN NGÀY THAM CHIẾU
+# -------------------------------------------------------------
+h_col1, h_col2 = st.columns([4, 1])
+with h_col1:
+    st.markdown("""<div class="header-box">
+<h2>Master Plan SG — Cảnh báo Delay & Theo dõi MQL</h2>
+<p>Ưu tiên xem theo Khách hàng / MQL · Bỏ qua các đơn có cột H = Done / Services</p>
+</div>""", unsafe_allow_html=True)
+with h_col2:
+    st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
+    ref_date = st.date_input("Ngày tham chiếu phân tích",
+    datetime.now(ZoneInfo("Asia/Ho_Chi_Minh")).date())
+
+# -------------------------------------------------------------
+# 2. TỐI ƯU HÓA: AUTO-FIX LINK CHỐNG LỖI 404 & CHỐNG CHẶN BOT
+# -------------------------------------------------------------
+
+st.sidebar.header("📁 Cập nhật kế hoạch")
+
+if "saved_link" not in st.session_state:
+    st.session_state["saved_link"] = ""
+
+if st.sidebar.button("🔄 Làm mới dữ liệu (Tải lại từ đầu)", type="primary"):
+    st.cache_data.clear()
+
+data_source = st.sidebar.radio(
+    "Chọn phương thức tải dữ liệu:", 
+    ("Dùng Link Google Sheets/Drive", "Tải file Excel từ máy")
+)
+
+raw_file_bytes = None
+
+if data_source == "Tải file Excel từ máy":
+    uploaded_file = st.sidebar.file_uploader("Tải file Excel", type=["xlsx", "xls"])
+    if uploaded_file:
+        raw_file_bytes = uploaded_file.getvalue()
+else:
+    st.sidebar.info("💡 Bạn có thể dán Link Công bố (Publish) hoặc Link Chia sẻ (Share) đều được. Hệ thống sẽ tự động xử lý.")
+    gsheet_url = st.sidebar.text_input("Dán Link vào đây:", key="saved_link")
+    
+    if not gsheet_url and not st.session_state.get('user_changed_link', False):
+        gsheet_url = ("https://docs.google.com/spreadsheets/d/e/"
+                      "2PACX-1vTQOMzsXaj_Ed_ooA9x8LJ8NTkikDIBYVGs87h-ajD9FYjWHktL-MrzVcGqxFqRcFaNkTHzcH-xLARR/"
+                      "pub?output=xlsx")
+                      
+    st.sidebar.caption("Nguồn dữ liệu mặc định: Master Plan SG")
+    
+    if gsheet_url:
+        with st.sidebar.status("Đang tải dữ liệu...", expanded=False) as status:
+            content, err = fetch_excel_from_url(gsheet_url)
+            if err:
+                status.update(label=err, state="error")
+            else:
+                raw_file_bytes = content
+                status.update(label="Dữ liệu đã sẵn sàng!", state="complete")
+
+
+
+# -------------------------------------------------------------
+# 3. HÀM ĐỌC DỮ LIỆU & LẤY NGÀY NỐI ĐUÔI
+# -------------------------------------------------------------
+
 
 if raw_file_bytes is not None:
     df_raw, machine_free_dates, parsed_notes = load_and_preprocess_data(raw_file_bytes, str(ref_date))
