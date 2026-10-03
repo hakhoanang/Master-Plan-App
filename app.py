@@ -637,7 +637,7 @@ if 'Start' in df_filtered.columns and not df_filtered.empty:
                 text="📅 Lịch trình chạy máy ",
                 font=dict(size=20, weight="bold"),
                 x=0.0,
-                y=1.5
+                y=1.
             ),
             height=max(450, len(FACTORY_MACHINES) * 38), 
             margin=dict(l=10, r=10, t=50, b=10), 
