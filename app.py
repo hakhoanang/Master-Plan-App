@@ -32,7 +32,7 @@ st.markdown("""
     .kpi-amber { background-color: #facc15; } .kpi-amber * { color: #111827 !important; }
     .kpi-blue { background-color: #3b82f6; } .kpi-blue * { color: #ffffff !important; }
     .kpi-green { background-color: #22c55e; } .kpi-green * { color: #ffffff !important; }
-    .kpi-black { background-color: #000000; border: 1px solid rgba(255,255,255,0.1); } .kpi-black * { color: #ffffff !important; }
+    .kpi-black { background-color: #9333EA; border: 1px solid rgba(255,255,255,0.1); } .kpi-black * { color: #ffffff !important; }
     .m-card { background-color: var(--background-color); border: 1px solid rgba(128, 128, 128, 0.2); border-radius: 7px; padding: 10px 12px; border-left: 5px solid #22c55e; margin-bottom: 10px; min-height: 100px; }
     .m-card.crit { border-left-color: #ef4444; background-color: rgba(239, 68, 68, 0.03); }
     .m-card.warn { border-left-color: #f97316; background-color: rgba(249, 115, 22, 0.03); }
@@ -347,7 +347,7 @@ def tv_document(snapshot, error=''):
     cards=[]
     labels=['Quá hạn','< 7 ngày','7–14 ngày','14–21 ngày','An toàn','Tổng tồn']
     for label in labels:
-        color=('#000000' if label=='Tổng tồn' else '#facc15' if label=='7–14 ngày' else TV_COLORS[label])
+        color=('#9333EA' if label=='Tổng tồn' else '#facc15' if label=='7–14 ngày' else TV_COLORS[label])
         value=len(df) if label=='Tổng tồn' else int(counts.get(label,0))
         sub={'Quá hạn':'Cần xử lý','< 7 ngày':'Cần xử lý hôm nay','7–14 ngày':'Theo dõi sát tiến độ',
              '14–21 ngày':'Không chủ quan','An toàn':'> 21 ngày','Tổng tồn':'Chưa hoàn thành'}[label]
