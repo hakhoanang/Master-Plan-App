@@ -308,6 +308,75 @@ def tv_snapshot(url):
         raise ValueError('File rỗng hoặc không đọc được các sheet kế hoạch.')
     return dict(df=frame, free=free, notes=notes, updated=now, ref=now.date())
 
+# Heatmap cuốn chiếu: 1 quá hạn + 15 khoảng hai ngày + 1 xa hạn + 1 thiếu hạn.
+def heat_bucket(days):
+    if pd.isna(days): return 17
+    if days < 0: return 0
+    if days >= 30: return 16
+    return 1 + int(days // 2)
+
+def heat_counts(frame, reference):
+    result = pd.DataFrame(0, index=FACTORY_MACHINES, columns=range(18), dtype=int)
+    if frame.empty: return result
+    work = frame.copy()
+    if 'Status' in work:
+        work = work[~work['Status'].astype(str).str.strip().str.lower().isin(['done','services'])].copy()
+    deadlines = pd.to_datetime(work['Hạn áp dụng'], errors='coerce').dt.normalize()
+    days = (deadlines - pd.Timestamp(reference).normalize()).dt.days
+    work['_bucket'] = days.map(heat_bucket)
+    work['_mql'] = work['Job Order'].fillna('').astype(str).str.strip()
+    work = work[work['_mql'].ne('')]
+    for (machine, bucket), count in work.groupby(['Machine Name','_bucket'])['_mql'].nunique().items():
+        if machine in result.index: result.at[machine,bucket] = int(count)
+    return result
+
+def rolling_heat_html(frame, reference, tv=False):
+    counts = heat_counts(frame, reference)
+    base = pd.Timestamp(reference).normalize()
+    labels = ['Quá hạn'] + [(base+pd.Timedelta(days=2*i)).strftime('%d/%m') for i in range(15)] + ['≥30 ngày','Thiếu hạn']
+    # Nội suy cam → xanh lá trực tiếp, không có dải vàng hoặc xanh lam riêng.
+    orange, green = (249,115,22), (34,197,94)
+    colors = ['#ef4444'] + ['#'+''.join(f'{round(a+(b-a)*i/14):02x}' for a,b in zip(orange,green)) for i in range(15)] + ['#22c55e','#94a3b8']
+    style = '''<style>
+    .rh-wrap{width:100%;background:white;color:#111827;display:flex;flex-direction:column;min-height:0}
+    .rh-wrap.rh-tv{height:100%;flex:1}.rh-scroll{width:100%;overflow-x:auto}
+    .rh-tv .rh-scroll{flex:1;min-height:0;overflow:hidden}
+    table.rh{width:100%;border-collapse:collapse;table-layout:fixed;font-family:Arial,sans-serif}
+    .rh th,.rh td{border:1px solid #cbd5e1;text-align:center;padding:5px 2px;font-size:15px;line-height:1.1;color:#111827}
+    .rh th{font-weight:700}.rh tbody th{background:#e2e8f0}.rh td{font-weight:700;background:#f8fafc}
+    .rh .rh-sep{border-left:3px solid #64748b}
+    .rh-note{font-size:15px;line-height:1.2;padding:8px 0;flex:none}
+    .rh-tv table.rh{height:100%}.rh-tv .rh th,.rh-tv .rh td{font-size:23px;padding:1px 2px}
+    .rh-tv .rh thead th{font-size:21px;padding:7px 1px}.rh-tv .rh-note{font-size:19px}
+    @media(max-width:1000px){.rh-wrap:not(.rh-tv) table.rh{min-width:1200px}}
+    </style>'''
+    output = [style,'<div class="rh-wrap'+(' rh-tv' if tv else '')+'"><div class="rh-scroll"><table class="rh"><thead><tr><th style="width:6%;background:#e2e8f0">Máy</th>']
+    for index,(label,color) in enumerate(zip(labels,colors)):
+        sep = ' class="rh-sep"' if index in [0,1,16,17] else ''
+        output.append(f'<th{sep} style="background:{color}">{html.escape(label)}</th>')
+    output.append('</tr></thead><tbody>')
+    for machine in FACTORY_MACHINES:
+        output.append(f'<tr><th scope="row">{html.escape(machine)}</th>')
+        for index,(label,color) in enumerate(zip(labels,colors)):
+            count = int(counts.at[machine,index])
+            if 1 <= index <= 15:
+                start = base+pd.Timedelta(days=2*(index-1))
+                interval = start.strftime('%d/%m/%Y')+' – '+(start+pd.Timedelta(days=1)).strftime('%d/%m/%Y')
+            else: interval = label
+            tip = html.escape(f'{machine} | {interval}: {count} MQL duy nhất',quote=True)
+            sep = ' class="rh-sep"' if index in [0,1,16,17] else ''
+            output.append(f'<td{sep} title="{tip}" style="background:{color if count else "#f8fafc"}">{count if count else ""}</td>')
+        output.append('</tr>')
+    output.append('</tbody></table></div><div class="rh-note">Mỗi cột ngày gồm ngày ghi trên đầu cột và ngày kế tiếp · Số trong ô: MQL duy nhất trên máy trong khoảng hạn · Ô trống: 0</div></div>')
+    return ''.join(output)
+
+def format_weekly_gantt(fig, reference):
+    fig.update_xaxes(tickmode='linear', tick0=pd.Timestamp(reference).strftime('%Y-%m-%d'),
+        dtick=7*24*60*60*1000, tickformat='%d %b', ticklabelmode='instant',
+        tickformatstops=[], title=None)
+    fig.update_layout(bargap=.04, bargroupgap=0)
+    fig.update_traces(marker_line_color='white', marker_line_width=1)
+
 def tv_document(snapshot, error=''):
     df = snapshot['df']
     df = df[~df['Status'].str.lower().isin(['done','services'])].copy()
@@ -318,7 +387,7 @@ def tv_document(snapshot, error=''):
     def chart(title, fig):
         fig.update_layout(autosize=True, height=None, width=None,
             font=dict(size=28), title=None,
-            margin=dict(l=100,r=110,t=30,b=100),
+            margin=dict(l=70,r=35,t=12,b=55),
             showlegend=False,
             paper_bgcolor='white',plot_bgcolor='white')
         fig.update_xaxes(automargin=True)
@@ -341,7 +410,7 @@ def tv_document(snapshot, error=''):
                 legends.append('<span><i style="background:'+html.escape(str(color))+'"></i>'+html.escape(str(label))+'</span>')
         legend_html = '<div class="chart-legend">'+''.join(legends)+'</div>'
         payload=fig.to_json().replace('</','<\\/')
-        add(title,legend_html+'<div class="chart"></div><script type="application/json" class="figure">'+payload+'</script>')
+        add(title,'<div class="chart-layout"><div class="chart"></div>'+legend_html+'</div><script type="application/json" class="figure">'+payload+'</script>')
 
     counts=df['Mức rủi ro'].value_counts()
     cards=[]
@@ -364,7 +433,16 @@ def tv_document(snapshot, error=''):
         rc=counts.rename_axis('Mức rủi ro').reset_index(name='Số lượng')
         fig=px.pie(rc,values='Số lượng',names='Mức rủi ro',color='Mức rủi ro',hole=.55,
             color_discrete_map=TV_COLORS,category_orders={'Mức rủi ro':risks})
-        fig.update_traces(sort=False,textinfo='percent+value',textfont_size=32)
+        fig = px.pie(rc,values='Số lượng',names='Mức rủi ro',color='Mức rủi ro',hole=0.55,color_discrete_map=TV_COLORS, category_orders={'Mức rủi ro': risks})
+        fig.update_traces(
+            sort=False,
+            textinfo='percent+value',
+            textposition='inside',
+            insidetextorientation='horizontal',
+            textfont_size=26
+        )
+        chart('Tỷ lệ phân bổ rủi ro tổng thể', fig)
+
         chart('Tỷ lệ phân bổ rủi ro tổng thể',fig)
         qty=pd.to_numeric(df['Qty'],errors='coerce').fillna(0)
         for title,series,color in [
@@ -379,16 +457,7 @@ def tv_document(snapshot, error=''):
             chart(title,fig)
 
     machines=FACTORY_MACHINES
-    rows='<tr><th>Máy</th>'+''.join('<th>'+html.escape(r)+'</th>' for r in risks)+'</tr>'
-    for machine in machines:
-        values=df[df['Machine Name']==machine]['Mức rủi ro'].value_counts()
-        rows+='<tr><th>'+machine+'</th>'
-        for risk in risks:
-            value=int(values.get(risk,0)); color=TV_COLORS[risk] if value else '#f4f5f7'
-            fg='#111827' if risk=='7–14 ngày' else 'white'
-            rows+=f'<td style="background:{color};color:{fg if value else "#999"}">{value}</td>'
-        rows+='</tr>'
-    add('Heatmap cảnh báo theo máy — Toàn bộ 24 máy','<table class="heat">'+rows+'</table>')
+    add('Heatmap theo hạn giao — 30 ngày từ '+snapshot['ref'].strftime('%d/%m/%Y'), rolling_heat_html(df, snapshot['ref'], tv=True))
     if {'Start','End'}.issubset(df.columns):
         gantt=df[df['Machine Name'].isin(machines)].dropna(subset=['Start','End']).copy()
         for machine in machines:
@@ -402,6 +471,7 @@ def tv_document(snapshot, error=''):
         fig.update_yaxes(autorange='reversed',title='',categoryorder='array',
             categoryarray=machines,tickmode='array',tickvals=machines,tickfont=dict(size=23))
         fig.update_traces(textfont=dict(size=20,color='white'),textposition='inside')
+        format_weekly_gantt(fig, snapshot['ref'])
         chart('Lịch trình chạy máy — Toàn bộ 24 máy',fig)
 
     for start in range(0,len(FACTORY_MACHINES),6):
@@ -437,7 +507,11 @@ def tv_document(snapshot, error=''):
     *{box-sizing:border-box}body{margin:0;font-family:Arial,sans-serif;color:#111827;background:white;overflow:hidden}
     .slide{display:none;height:100vh;padding:16px 24px 72px}.slide.active{display:flex;flex-direction:column}
     h1{font-size:38px;margin:0 0 18px;flex:none}.body{flex:1;min-height:0;display:flex;flex-direction:column}.chart{width:100%;flex:1;min-height:0}
-    .chart-legend{display:flex;flex-wrap:wrap;justify-content:center;gap:12px 28px;font-size:24px;padding:4px 8px 16px;flex:none}.chart-legend span{display:inline-flex;align-items:center;gap:8px;white-space:nowrap}.chart-legend i{width:20px;height:20px;display:inline-block;border-radius:3px}
+    .chart-layout{display:flex;flex:1;min-height:0;width:100%;gap:12px}
+    .chart-layout .chart{flex:1;min-width:0;width:0;height:100%}
+    .chart-legend{display:flex;flex-direction:column;align-items:flex-start;gap:18px;font-size:24px;padding:36px 0 0;flex:0 0 200px}
+    .chart-legend span{display:inline-flex;align-items:center;gap:8px;white-space:normal}
+    .chart-legend i{width:20px;height:20px;flex:none;display:inline-block;border-radius:3px}
     .grid{height:100%;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr));gap:22px}
     .kpi{border-radius:12px;padding:28px;font-size:36px;display:flex;flex-direction:column;justify-content:center}
     .kpi strong{font-size:96px;margin:12px 0}.kpi small{font-size:28px}
@@ -687,8 +761,9 @@ with c_left:
         c_counts = c_counts.sort_values(['Customer', 'Mức rủi ro'])
 
         fig_bar = px.bar(c_counts, x='Customer', y='Số đơn', color='Mức rủi ro', color_discrete_map=color_map, text='Số đơn', category_orders={"Mức rủi ro": risk_order})
-        fig_bar.update_layout(margin=dict(l=10, r=10, t=10, b=10), height=260, yaxis=dict(title='Số đơn'), xaxis=dict(title='Khách hàng', categoryorder='total descending'), barmode='stack', showlegend=False)
+        fig_bar.update_layout(margin=dict(l=10, r=10, t=10, b=10), height=260, yaxis=dict(title='Số đơn'), xaxis=dict(title='Khách hàng', categoryorder='total descending'), barmode='stack', showlegend=True)
         fig_bar.update_traces(textposition='inside', insidetextanchor='middle')
+        fig_bar.update_layout(height=380, margin=dict(l=30,r=155,t=25,b=55), legend=dict(orientation='v',x=1.02,xanchor='left',y=.92,yanchor='top',title_text=''))
         st.plotly_chart(fig_bar, use_container_width=True)
     else: st.info("Không có dữ liệu để hiển thị biểu đồ.")
 
@@ -703,6 +778,7 @@ with c_right:
         fig_donut = px.pie(risk_counts, values='Số lượng', names='Mức rủi ro', color='Mức rủi ro', color_discrete_map=color_map, hole=0.55, category_orders={"Mức rủi ro": risk_order})
         fig_donut.update_traces(sort=False)
         fig_donut.update_layout(margin=dict(l=10, r=10, t=10, b=10), height=260, legend=dict(traceorder='normal'))
+        fig_donut.update_layout(height=380, margin=dict(l=10,r=155,t=25,b=25), legend=dict(orientation='v',x=1.02,xanchor='left',y=.92,yanchor='top'))
         st.plotly_chart(fig_donut, use_container_width=True)
     else: st.info("Không có dữ liệu để hiển thị.")
 
@@ -748,124 +824,11 @@ if not df_filtered.empty:
 else: st.info("Không có dữ liệu để vẽ biểu đồ Pareto.")
 
 # -------------------------------------------------------------
-# 8. BẢNG TỔNG HỢP RỦI RO THEO MÁY (MA TRẬN KHUNG VUÔNG & TÔ FULL MÀU Ô)
+# 8. HEATMAP CUỐN CHIẾU 30 NGÀY — TOÀN BỘ 24 MÁY
 # -------------------------------------------------------------
 st.markdown("---")
-st.markdown("##### 🔥 Heatmap cảnh báo theo máy")
-st.markdown("<p style='font-size:12.5px; opacity:0.8; margin-top:-5px;'>Theo dõi giám sát các máy có nguy cơ cao.</p>", unsafe_allow_html=True)
-
-heatmap_data = pd.DataFrame(index=FACTORY_MACHINES, columns=risk_order).fillna(0)
-
-if not df_filtered.empty:
-    grouped_risk = df_filtered.groupby(['Machine Name', 'Mức rủi ro']).size().reset_index(name='Số lượng')
-    for _, row in grouped_risk.iterrows():
-        m_name = row['Machine Name']
-        m_risk = row['Mức rủi ro']
-        if m_name in FACTORY_MACHINES and m_risk in risk_order:
-            heatmap_data.at[m_name, m_risk] = row['Số lượng']
-
-heatmap_data = heatmap_data.astype(int)
-
-risk_colors_hex = {
-    'Quá hạn': '#ef4444',      # Đỏ
-    '< 7 ngày': '#f97316',    # Cam
-    '7–14 ngày': '#eab308',   # Vàng sáng
-    '14–21 ngày': '#3b82f6',  # Xanh lam
-    'An toàn': '#22c55e',      # Xanh lục
-    'Thiếu hạn': '#94a3b8'     # Xám
-}
-
-# Xây dựng cấu trúc CSS đảm bảo khung tổng thể cân xứng hình vuông và các ô tô full màu
-heatmap_html = '''
-<style>
-.hm-square-wrapper {
-    display: flex;
-    justify-content: flex-start;
-    margin-bottom: 10px;
-}
-.hm-square-container {
-    width: 650px;
-    height: 650px;
-    max-width: 100%;
-    aspect-ratio: 1 / 1;
-    overflow: auto;
-    border: 2px solid rgba(128, 128, 128, 0.3);
-    border-radius: 8px;
-    background-color: var(--secondary-background-color);
-    padding: 5px;
-}
-.hm-square-table {
-    width: 100%;
-    height: 100%;
-    border-collapse: collapse;
-    text-align: center;
-    font-size: 13px;
-    font-family: sans-serif;
-    table-layout: fixed;
-}
-.hm-square-table th {
-    padding: 8px 4px;
-    font-weight: 700;
-    color: var(--text-color);
-    background-color: var(--background-color);
-    position: sticky;
-    top: 0;
-    z-index: 2;
-    border: 1px solid rgba(128,128,128,0.3);
-    font-size: 12px;
-}
-.hm-square-table td {
-    border: 1px solid rgba(128, 128, 128, 0.2);
-    padding: 0;
-    height: 100%;
-}
-.hm-full-cell {
-    width: 100%;
-    height: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-weight: 700;
-    font-size: 13px;
-    min-height: 24px;
-}
-.hm-row-mach {
-    font-weight: bold;
-    text-align: center;
-    background-color: var(--background-color);
-    position: sticky;
-    left: 0;
-    z-index: 1;
-    color: var(--text-color);
-    border: 1px solid rgba(128,128,128,0.3) !important;
-}
-</style>
-<div class="hm-square-wrapper">
-<div class="hm-square-container">
-<table class="hm-square-table">
-<thead>
-    <tr><th class="hm-row-mach" style="width: 15%;">Máy</th>
-'''
-for r in risk_order:
-    heatmap_html += f"<th>{r}</th>"
-heatmap_html += "</tr></thead><tbody>"
-
-for m in FACTORY_MACHINES:
-    heatmap_html += f"<tr><td class='hm-row-mach'>{m}</td>"
-    for r in risk_order:
-        val = heatmap_data.at[m, r]
-        tooltip = f"Máy {m} | {r}: {val} đơn"
-        
-        if val == 0:
-            heatmap_html += f"<td><div class='hm-full-cell' title='{tooltip}' style='color: rgba(128,128,128,0.4); background-color: transparent;'>0</div></td>"
-        else:
-            bg_color = risk_colors_hex[r]
-            font_color = "#111827" if r == '7–14 ngày' else "#ffffff"
-            heatmap_html += f"<td><div class='hm-full-cell' title='{tooltip}' style='background-color: {bg_color}; color: {font_color};'>{val}</div></td>"
-    heatmap_html += "</tr>"
-heatmap_html += "</tbody></table></div></div>"
-
-st.markdown(heatmap_html, unsafe_allow_html=True)
+st.markdown("##### 🔥 Heatmap theo hạn giao — 30 ngày cuốn chiếu")
+st.markdown(rolling_heat_html(df_filtered, ref_date), unsafe_allow_html=True)
 
 # -------------------------------------------------------------
 # 9. BIỂU ĐỒ GANTT LỊCH TRÌNH CHẠY MÁY NỐI TIẾP
@@ -922,6 +885,8 @@ if 'Start' in df_filtered.columns and not df_filtered.empty:
         )
         
         fig_gantt.update_traces(textfont=dict(size=14, color='white', weight='bold'), textposition='inside', insidetextanchor='middle')
+        format_weekly_gantt(fig_gantt, ref_date)
+        fig_gantt.update_layout(margin=dict(l=15,r=170,t=50,b=40), legend=dict(orientation='v',x=1.02,xanchor='left',y=.92,yanchor='top',title_text=''))
         st.plotly_chart(fig_gantt, use_container_width=True)
     else: st.info("⚠️️ Không có dữ liệu lịch chạy hợp lệ để vẽ biểu đồ.")
 else: st.error("❌ Không tìm thấy cột chứa dữ liệu ngày tháng trong file Excel của bạn.")
