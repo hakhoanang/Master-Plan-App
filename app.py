@@ -93,25 +93,25 @@ def fetch_excel_from_url(gsheet_url_param):
         return None, f"Lỗi mạng: {e}"
 
 FACTORY_MACHINES = [
-    "MB1", "MA2", "MB3", "MA6", "MB6", "MA7", "MB7", 
-    "MA1", "MB2", "MA3", "MA5", "MB5", "MA8", "MB8", 
-    "MA4", "MB4", "TC2", "TD2", "TC3", "TC1", "TD1", 
-    "GD1", "GD2", "WC"
+    "SG-MB01", "SG-MA02", "SG-MB03", "SG-MA06", "SG-MB06", "SG-MA07", "SG-MB07", 
+    "SG-MA01", "SG-MB02", "SG-MA03", "SG-MA05", "SG-MB05", "SG-MA08", "SG-MB08", 
+    "SG-MA04", "SG-MB04", "SG-TC02", "SG-TD02", "SG-TC03", "SG-TC01", "SG-TD01", 
+    "SG-GD01", "SG-GD02", "SG-WCTQ"
 ]
 
 MACHINE_DETAILS = {
-    "MA1": {"a": "TIÊN", "b": "VŨ", "note": ""}, "MA2": {"a": "HẢI", "b": "TRẠNG", "note": ""},
-    "MA3": {"a": "B NAM", "b": "MẪN", "note": ""}, "MA4": {"a": "B NAM", "b": "MẪN", "note": ""},
-    "MA5": {"a": "NAM", "b": "LUÂN", "note": ""}, "MA6": {"a": "NAM", "b": "LUÂN", "note": ""},
-    "MA7": {"a": "KỲ", "b": "VINH", "note": ""}, "MA8": {"a": "HIỀN", "b": "MINH", "note": ""},
-    "MB1": {"a": "TIÊN", "b": "VŨ", "note": ""}, "MB2": {"a": "HẢI", "b": "TRẠNG", "note": ""},
-    "MB3": {"a": "THÀNH", "b": "THÔNG", "note": ""}, "MB4": {"a": "THÀNH", "b": "THÔNG", "note": ""},
-    "MB5": {"a": "NAM", "b": "LUÂN", "note": ""}, "MB6": {"a": "NAM", "b": "LUÂN", "note": ""},
-    "MB7": {"a": "KỲ", "b": "VINH", "note": ""}, "MB8": {"a": "HIỀN", "b": "MINH", "note": ""},
-    "TC1": {"a": "HOÀNG", "b": "NAM (T)", "note": ""}, "TC2": {"a": "HOÀNG", "b": "NAM (T)", "note": ""},
-    "TC3": {"a": "ĐỆ", "b": "KIỆT", "note": ""}, "TD1": {"a": "ĐẠT", "b": "PHÚ", "note": ""},
-    "TD2": {"a": "ĐẠT", "b": "PHÚ", "note": ""}, "GD1": {"a": "HỮU", "b": "—", "note": ""},
-    "GD2": {"a": "HỮU", "b": "—", "note": ""}, "WC": {"a": "—", "b": "—", "note": ""}
+    "SG-MA01": {"a": "TIÊN", "b": "VŨ", "note": ""}, "SG-MA02": {"a": "HẢI", "b": "TRẠNG", "note": ""},
+    "SG-MA03": {"a": "B NAM", "b": "MẪN", "note": ""}, "SG-MA04": {"a": "B NAM", "b": "MẪN", "note": ""},
+    "SG-MA05": {"a": "NAM", "b": "LUÂN", "note": ""}, "SG-MA06": {"a": "NAM", "b": "LUÂN", "note": ""},
+    "SG-MA07": {"a": "KỲ", "b": "VINH", "note": ""}, "SG-MA08": {"a": "HIỀN", "b": "MINH", "note": ""},
+    "SG-MB01": {"a": "TIÊN", "b": "VŨ", "note": ""}, "SG-MB02": {"a": "HẢI", "b": "TRẠNG", "note": ""},
+    "SG-MB03": {"a": "THÀNH", "b": "THÔNG", "note": ""}, "SG-MB04": {"a": "THÀNH", "b": "THÔNG", "note": ""},
+    "SG-MB05": {"a": "NAM", "b": "LUÂN", "note": ""}, "SG-MB06": {"a": "NAM", "b": "LUÂN", "note": ""},
+    "SG-MB07": {"a": "KỲ", "b": "VINH", "note": ""}, "SG-MB08": {"a": "HIỀN", "b": "MINH", "note": ""},
+    "SG-TC01": {"a": "HOÀNG", "b": "NAM (T)", "note": ""}, "SG-TC02": {"a": "HOÀNG", "b": "NAM (T)", "note": ""},
+    "SG-TC03": {"a": "ĐỆ", "b": "KIỆT", "note": ""}, "SG-TD01": {"a": "ĐẠT", "b": "PHÚ", "note": ""},
+    "SG-TD02": {"a": "ĐẠT", "b": "PHÚ", "note": ""}, "SG-GD01": {"a": "HỮU", "b": "—", "note": ""},
+    "SG-GD02": {"a": "HỮU", "b": "—", "note": ""}, "SG-WCTQ": {"a": "—", "b": "—", "note": ""}
 }
 
 def parse_gantt_dates(val, ref_year):
